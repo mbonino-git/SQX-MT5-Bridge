@@ -73,43 +73,77 @@ class TestAIReviewerInit:
 
 
 class TestReviewPromptConstruction:
-    """Tests for the review_code prompt construction."""
+    """Tests for review_code message construction (mocked)."""
 
-    def test_review_prompt_contains_code(self):
+    @pytest.mark.asyncio
+    async def test_review_code_sends_default_system_prompt(self):
         from services.ai_reviewer import AIReviewer
 
         provider = AIProvider(name="Test", type="openai-compatible", base_url="http://localhost:1234/v1")
         reviewer = AIReviewer(provider)
-        prompt = reviewer._build_review_prompt("int OnInit() { return(INIT_SUCCEEDED); }")
-        assert "int OnInit() { return(INIT_SUCCEEDED); }" in prompt
-        assert "MQL5" in prompt
-        assert "Expert Advisor" in prompt
 
-    def test_review_prompt_uses_default_system_prompt(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "code"}}]
+        }
+
+        with patch.object(reviewer.client, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+            await reviewer.review_code("int OnInit() { return(INIT_SUCCEEDED); }")
+            messages = mock_post.call_args[1]["json"]["messages"]
+            # System prompt should be the default review prompt
+            assert messages[0]["role"] == "system"
+            assert "MQL5" in messages[0]["content"]
+            assert "Expert Advisor" in messages[0]["content"]
+            # User message should contain the code
+            assert messages[1]["role"] == "user"
+            assert "int OnInit()" in messages[1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_review_code_default_prompt_includes_key_topics(self):
         from services.ai_reviewer import AIReviewer
 
         provider = AIProvider(name="Test", type="openai-compatible", base_url="http://localhost:1234/v1")
         reviewer = AIReviewer(provider)
-        prompt = reviewer._build_review_prompt("code here")
-        assert "#include" in prompt
-        assert "deprecated" in prompt.lower()
-        assert "lot sizing" in prompt.lower()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"choices": [{"message": {"content": "code"}}]}
+
+        with patch.object(reviewer.client, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+            await reviewer.review_code("code here")
+            messages = mock_post.call_args[1]["json"]["messages"]
+            system_content = messages[0]["content"]
+            assert "#include" in system_content
+            assert "deprecated" in system_content.lower()
+            assert "lot sizing" in system_content.lower()
 
 
 class TestFixPromptConstruction:
-    """Tests for the fix_errors prompt construction."""
+    """Tests for fix_errors message construction (mocked)."""
 
-    def test_fix_prompt_contains_errors_and_code(self):
+    @pytest.mark.asyncio
+    async def test_fix_errors_sends_errors_and_code_in_user_message(self):
         from services.ai_reviewer import AIReviewer
 
         provider = AIProvider(name="Test", type="openai-compatible", base_url="http://localhost:1234/v1")
         reviewer = AIReviewer(provider)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"choices": [{"message": {"content": "fixed"}}]}
+
         errors = "1:1 error: undeclared identifier 'x'"
         code = "void OnTick() { x = 1; }"
-        prompt = reviewer._build_fix_prompt(code, errors)
-        assert errors in prompt
-        assert code in prompt
-        assert "compilation errors" in prompt.lower()
+
+        with patch.object(reviewer.client, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+            await reviewer.fix_errors(code, errors)
+            messages = mock_post.call_args[1]["json"]["messages"]
+            # System prompt should mention compilation errors
+            assert "compilation errors" in messages[0]["content"].lower()
+            # User message should contain both errors and code
+            assert errors in messages[1]["content"]
+            assert code in messages[1]["content"]
 
 
 # ── Response Parsing Tests ───────────────────────────────────────
@@ -188,7 +222,7 @@ class TestReviewCodeAsync:
             mock_post.assert_called_once()
             call_args = mock_post.call_args
             assert call_args[0][0] == "http://localhost:1234/v1/chat/completions"
-            assert call_args[1]["headers"]["Authorization"] == "sk-test"
+            assert call_args[1]["headers"]["Authorization"] == "Bearer sk-test"
             assert "test-model" in str(call_args[1]["json"])
             assert result == 'void OnTick() { Print("fixed"); }'
 
@@ -259,6 +293,27 @@ class TestReviewCodeAsync:
             await reviewer.review_code("code")
             headers = mock_post.call_args[1]["headers"]
             assert "Authorization" not in headers  # no auth header when no key
+
+    @pytest.mark.asyncio
+    async def test_authorization_header_has_bearer_prefix(self):
+        """Authorization header must use 'Bearer <key>' format for OpenAI/Claude compatibility."""
+        from services.ai_reviewer import AIReviewer
+
+        provider = AIProvider(
+            name="Test", type="openai", base_url="https://api.openai.com/v1",
+            api_key="sk-my-secret", model="gpt-4",
+        )
+        reviewer = AIReviewer(provider)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+
+        with patch.object(reviewer.client, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+            await reviewer.review_code("code")
+            auth = mock_post.call_args[1]["headers"]["Authorization"]
+            assert auth == "Bearer sk-my-secret"
+            assert auth.startswith("Bearer ")
 
 
 # ── Provider Type Routing Tests ──────────────────────────────────

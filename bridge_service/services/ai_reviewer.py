@@ -110,23 +110,6 @@ class AIReviewer:
         raw_response = await self._call_api(messages)
         return self._extract_code(raw_response)
 
-    # ── Prompt Builders (exposed for testing) ────────────────────
-
-    def _build_review_prompt(self, code: str) -> str:
-        """Build the full system prompt for code review."""
-        return (
-            f"{DEFAULT_REVIEW_SYSTEM_PROMPT}\n\n"
-            f"Code to review:\n```mql5\n{code}\n```"
-        )
-
-    def _build_fix_prompt(self, code: str, errors: str) -> str:
-        """Build the full system prompt for error fixing."""
-        return (
-            f"{DEFAULT_FIX_SYSTEM_PROMPT}\n\n"
-            f"Errors:\n{errors}\n\n"
-            f"Code:\n```mql5\n{code}\n```"
-        )
-
     # ── Response Parser ─────────────────────────────────────────
 
     def _extract_code(self, response: str) -> str:
@@ -170,7 +153,7 @@ class AIReviewer:
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         headers: dict[str, str] = {}
         if self.api_key:
-            headers["Authorization"] = self.api_key
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         payload: dict[str, Any] = {
             "model": self.model,
