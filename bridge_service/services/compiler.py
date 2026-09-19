@@ -6,7 +6,6 @@ Provides CompileResult with parsed errors and warnings from metaeditor output.
 import re
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
 
 
 # ── Data Models ───────────────────────────────────────────────────
