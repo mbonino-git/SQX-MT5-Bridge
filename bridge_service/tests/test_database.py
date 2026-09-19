@@ -264,6 +264,37 @@ class TestBackupCRUD:
         backups = db.list_backups(deployment_id=dep["id"])
         assert len(backups) == 2
 
+    def test_list_backups_unfiltered(self, tmp_db):
+        db, _ = tmp_db
+        dep = self._make_deployment(db)
+        db.create_backup(deployment_id=dep["id"], strategy_name="S",
+                         file_path="/a", file_hash="h1")
+        db.create_backup(deployment_id=dep["id"], strategy_name="S",
+                         file_path="/b", file_hash="h2")
+        all_backups = db.list_backups(deployment_id=None)
+        assert len(all_backups) == 2
+
+    def test_update_backup(self, tmp_db):
+        db, _ = tmp_db
+        dep = self._make_deployment(db)
+        created = db.create_backup(
+            deployment_id=dep["id"], strategy_name="S",
+            file_path="/old", file_hash="old_hash"
+        )
+        updated = db.update_backup(created["id"], file_path="/new", file_hash="new_hash")
+        assert updated["file_path"] == "/new"
+        assert updated["file_hash"] == "new_hash"
+
+    def test_update_backup_no_fields(self, tmp_db):
+        db, _ = tmp_db
+        dep = self._make_deployment(db)
+        created = db.create_backup(
+            deployment_id=dep["id"], strategy_name="S",
+            file_path="/x", file_hash="h"
+        )
+        result = db.update_backup(created["id"])
+        assert result["file_path"] == "/x"
+
     def test_delete_backup(self, tmp_db):
         db, _ = tmp_db
         dep = self._make_deployment(db)
@@ -320,9 +351,80 @@ class TestComparisonCRUD:
         comparisons = db.list_comparisons(deployment_id=dep["id"])
         assert len(comparisons) == 2
 
+    def test_list_comparisons_unfiltered(self, tmp_db):
+        db, _ = tmp_db
+        dep = self._make_deployment(db)
+        db.create_comparison(deployment_id=dep["id"], status="match")
+        db.create_comparison(deployment_id=dep["id"], status="mismatch")
+        all_comparisons = db.list_comparisons(deployment_id=None)
+        assert len(all_comparisons) == 2
+
+    def test_update_comparison(self, tmp_db):
+        db, _ = tmp_db
+        dep = self._make_deployment(db)
+        created = db.create_comparison(
+            deployment_id=dep["id"], status="pending",
+            sqx_metrics='{"profit": 1000}'
+        )
+        updated = db.update_comparison(
+            created["id"], status="done",
+            mt5_metrics='{"profit": 950}', deltas='{"profit": -50}'
+        )
+        assert updated["status"] == "done"
+        assert updated["mt5_metrics"] == '{"profit": 950}'
+        assert updated["deltas"] == '{"profit": -50}'
+
+    def test_update_comparison_no_fields(self, tmp_db):
+        db, _ = tmp_db
+        dep = self._make_deployment(db)
+        created = db.create_comparison(deployment_id=dep["id"], status="x")
+        result = db.update_comparison(created["id"])
+        assert result["status"] == "x"
+
     def test_delete_comparison(self, tmp_db):
         db, _ = tmp_db
         dep = self._make_deployment(db)
         created = db.create_comparison(deployment_id=dep["id"], status="x")
         db.delete_comparison(created["id"])
         assert db.get_comparison(created["id"]) is None
+
+
+# ── Foreign Key Constraints ───────────────────────────────────────
+
+
+class TestForeignKeyConstraints:
+    def test_negative_fk_mt5_target_id(self, tmp_db):
+        """Inserting a deployment with non-existent mt5_target_id raises IntegrityError."""
+        db, _ = tmp_db
+        provider = db.create_provider(name="P", type="openai")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.create_deployment(
+                strategy_name="S",
+                mt5_target_id=99999,
+                ai_provider_id=provider["id"],
+                status="pending",
+            )
+
+    def test_negative_fk_ai_provider_id(self, tmp_db):
+        """Inserting a deployment with non-existent ai_provider_id raises IntegrityError."""
+        db, _ = tmp_db
+        target = db.create_target(name="T", install_path="/t")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.create_deployment(
+                strategy_name="S",
+                mt5_target_id=target["id"],
+                ai_provider_id=99999,
+                status="pending",
+            )
+
+    def test_negative_fk_backup_deployment_id(self, tmp_db):
+        """Inserting a backup with non-existent deployment_id raises IntegrityError."""
+        db, _ = tmp_db
+        with pytest.raises(sqlite3.IntegrityError):
+            db.create_backup(deployment_id=99999, strategy_name="S")
+
+    def test_negative_fk_comparison_deployment_id(self, tmp_db):
+        """Inserting a comparison with non-existent deployment_id raises IntegrityError."""
+        db, _ = tmp_db
+        with pytest.raises(sqlite3.IntegrityError):
+            db.create_comparison(deployment_id=99999, status="x")

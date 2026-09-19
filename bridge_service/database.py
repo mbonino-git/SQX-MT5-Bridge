@@ -238,6 +238,17 @@ class Database:
             rows = self.execute("SELECT * FROM backups ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
+    def update_backup(self, backup_id: int, **fields) -> dict | None:
+        allowed = {"deployment_id", "strategy_name", "file_path", "file_hash"}
+        filtered = {k: v for k, v in fields.items() if k in allowed}
+        if not filtered:
+            return self.get_backup(backup_id)
+        set_clause = ", ".join(f"{k} = ?" for k in filtered)
+        values = list(filtered.values()) + [backup_id]
+        self.execute(f"UPDATE backups SET {set_clause} WHERE id = ?", tuple(values))
+        self.commit()
+        return self.get_backup(backup_id)
+
     def delete_backup(self, backup_id: int):
         self.execute("DELETE FROM backups WHERE id = ?", (backup_id,))
         self.commit()
@@ -280,6 +291,17 @@ class Database:
         else:
             rows = self.execute("SELECT * FROM comparisons ORDER BY id").fetchall()
         return [dict(r) for r in rows]
+
+    def update_comparison(self, comparison_id: int, **fields) -> dict | None:
+        allowed = {"deployment_id", "sqx_metrics", "mt5_metrics", "deltas", "status", "report_path"}
+        filtered = {k: v for k, v in fields.items() if k in allowed}
+        if not filtered:
+            return self.get_comparison(comparison_id)
+        set_clause = ", ".join(f"{k} = ?" for k in filtered)
+        values = list(filtered.values()) + [comparison_id]
+        self.execute(f"UPDATE comparisons SET {set_clause} WHERE id = ?", tuple(values))
+        self.commit()
+        return self.get_comparison(comparison_id)
 
     def delete_comparison(self, comparison_id: int):
         self.execute("DELETE FROM comparisons WHERE id = ?", (comparison_id,))
