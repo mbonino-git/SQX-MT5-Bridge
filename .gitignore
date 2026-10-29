@@ -26,3 +26,13 @@ backups/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Logs
+*.log
+
+# Settings (may contain local paths/secrets)
+bridge_settings.json
+plugin.xml
+
+# Build artifacts
+sqx_plugin/target/

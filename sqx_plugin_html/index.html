@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQX-MT5 Backtest Bridge</title>
+<script src="vue.global.prod.js"></script>
+<style>
+  :root {
+    --bg-body: #ffffff;
+    --bg-surface: #f8f8f8;
+    --bg-surface-2: #eef0f2;
+    --text-main: #333333;
+    --text-muted: #777777;
+    --border-color: #dddddd;
+    --primary: #337ab7;
+    --primary-hover: #286090;
+    --success: #5cb85c;
+    --danger: #d9534f;
+    --warning: #e0a800;
+  }
+
+  [data-theme="dark"] {
+    --bg-body: #1e1e1e;
+    --bg-surface: #2d2d2d;
+    --bg-surface-2: #383838;
+    --text-main: #e0e0e0;
+    --text-muted: #aaaaaa;
+    --border-color: #444444;
+    --primary: #337ab7;
+    --primary-hover: #4090d0;
+    --success: #5cb85c;
+    --danger: #d9534f;
+    --warning: #f0c419;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    background-color: var(--bg-body);
+    color: var(--text-main);
+    font-family: "Open Sans", Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    margin: 0;
+    padding: 16px;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  h2 { margin: 0 0 4px 0; font-size: 16px; }
+  h3 { margin: 0 0 8px 0; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); }
+
+  .scroll { flex: 1; overflow-y: auto; padding-right: 4px; }
+
+  .banner {
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    font-size: 12px;
+  }
+  .banner.offline { background: rgba(217,83,79,.12); color: var(--danger); border: 1px solid var(--danger); }
+  .banner.online { background: rgba(92,184,92,.12); color: var(--success); border: 1px solid var(--success); }
+  .banner code { background: var(--bg-surface-2); padding: 1px 5px; border-radius: 3px; }
+
+  .card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 120px; }
+  .field.checkbox { flex-direction: row; align-items: center; gap: 6px; }
+
+  select, input[type=text], input[type=number] {
+    background: var(--bg-body);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font-size: 12px;
+  }
+
+  button {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 14px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--primary-hover); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: var(--bg-surface-2); color: var(--text-main); }
+
+  .steps { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .steps li { padding: 3px 0; color: var(--text-muted); }
+  .steps li.active { color: var(--primary); font-weight: 600; }
+  .steps li.done { color: var(--success); }
+  .steps li.error { color: var(--danger); }
+  .steps li .icon { display: inline-block; width: 16px; }
+
+  table.compare { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.compare th, table.compare td { padding: 6px 8px; border-bottom: 1px solid var(--border-color); text-align: right; }
+  table.compare th:first-child, table.compare td:first-child { text-align: left; }
+  table.compare th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .diff-ok { color: var(--success); }
+  .diff-warn { color: var(--warning); }
+  .diff-bad { color: var(--danger); }
+
+  .settings-box {
+    background: var(--bg-body);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font-size: 12px;
+    color: var(--text-main);
+  }
+
+  .error-box {
+    background: rgba(217,83,79,.1);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 12px;
+    margin-bottom: 10px;
+    white-space: pre-wrap;
+  }
+
+  .disclaimer {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    text-align: justify;
+    flex-shrink: 0;
+  }
+
+  /* Batch mode */
+  .batch-progress-bar {
+    background: var(--bg-surface-2);
+    border-radius: 4px;
+    height: 6px;
+    margin: 8px 0;
+    overflow: hidden;
+  }
+  .batch-progress-fill {
+    background: var(--primary);
+    height: 100%;
+    transition: width .3s ease;
+    border-radius: 4px;
+  }
+  table.batch-results { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.batch-results th, table.batch-results td { padding: 6px 8px; border-bottom: 1px solid var(--border-color); text-align: right; }
+  table.batch-results th:first-child, table.batch-results td:first-child { text-align: left; }
+  table.batch-results th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  table.batch-results tr.batch-row { cursor: pointer; }
+  table.batch-results tr.batch-row:hover { background: var(--bg-surface-2); }
+  table.batch-results tr.batch-row-selected { background: rgba(51,122,183,.12); }
+  .batch-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }
+  .equity-charts { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .equity-chart { flex: 1 1 260px; min-width: 240px; }
+  .equity-chart canvas { width: 100%; height: 150px; display: block; background: var(--bg-surface-2); border: 1px solid var(--border-color); border-radius: 3px; }
+  .equity-chart .equity-title { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+  .equity-chart .equity-note { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+
+  /* Instance cards */
+  .instance-card {
+    background: var(--bg-body);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .instance-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .instance-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+  .instance-status.online { background: var(--success); }
+  .instance-status.offline { background: var(--danger); }
+  .instance-status.checking { background: var(--warning); }
+  .instance-label { font-weight: 600; }
+  .instance-detail { color: var(--text-muted); font-size: 11px; }
+  .btn-sm { padding: 3px 8px; font-size: 11px; }
+  .btn-danger { background: var(--danger); }
+  .btn-danger:hover:not(:disabled) { background: #c9302c; }
+  .btn-success { background: var(--success); }
+  .btn-success:hover:not(:disabled) { background: #449d44; }
+
+  /* Activity Log panel */
+  .log-panel {
+    margin-top: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-surface);
+    font-size: 11px;
+  }
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .log-header:hover { background: var(--bg-surface-2); }
+  .log-header-title { font-weight: 600; font-size: 12px; }
+  .log-controls { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .log-controls select {
+    font-size: 10px;
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+  .log-controls button {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .log-body {
+    max-height: 250px;
+    overflow-y: auto;
+    padding: 4px 0;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .log-entry {
+    padding: 1px 10px;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .log-entry:hover { background: var(--bg-surface-2); }
+  .log-ts { color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+  .log-level {
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 42px;
+  }
+  .log-level.info { color: var(--primary); }
+  .log-level.warn { color: var(--warning); }
+  .log-level.error { color: var(--danger); }
+  .log-cat {
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 48px;
+  }
+  .log-msg { color: var(--text-main); word-break: break-word; }
+  .log-details { color: var(--text-muted); font-size: 10px; margin-left: 4px; }
+  .log-badge {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-left: 4px;
+  }
+  .log-badge.error { background: rgba(217,83,79,.15); color: var(--danger); }
+  .log-badge.warn { background: rgba(224,168,0,.15); color: var(--warning); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <h2>SQX-MT5 Backtest Bridge</h2>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="secondary" style="padding:4px 10px;" @click="toggleInstances" title="Configure MT5 instances">⚙ Instances</button>
+      <button class="secondary" style="padding:4px 10px;" @click="toggleSettings" title="Bridge settings">⚙ Settings</button>
+    </div>
+  </div>
+
+  <!-- Instances Panel -->
+  <div class="card" v-if="showInstances">
+    <h3>MT5 Instances (for parallel batch)</h3>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
+      Run backtests across multiple MT5 terminals. Each instance needs its own terminal directory.
+    </div>
+    <div v-for="(inst, idx) in instances" :key="idx" class="instance-card">
+      <div class="instance-header">
+        <span class="instance-status" :class="inst.status"></span>
+        <span class="instance-label">Instance {{ idx + 1 }}</span>
+        <span class="instance-detail" v-if="inst.terminalPath">{{ inst.terminalPath }}</span>
+        <span class="instance-detail" v-else style="color:var(--danger);">Not configured</span>
+        <div style="margin-left:auto;display:flex;gap:4px;align-items:center;">
+          <label class="toggle-switch" :title="inst.enabled !== false ? 'Enabled for batch' : 'Disabled for batch'">
+            <input type="checkbox" :checked="inst.enabled !== false" @change="inst.enabled = $event.target.checked; saveInstances()">
+            <span class="toggle-slider"></span>
+          </label>
+          <button v-if="idx > 0" class="btn-sm btn-danger" @click="removeInstance(idx)">Remove</button>
+        </div>
+      </div>
+      <div class="row" style="margin-bottom:0;">
+        <div class="field" style="flex:1;">
+          <label>Terminal directory</label>
+          <input type="text" v-model="inst.terminalPath" :placeholder="idx === 0 ? 'C:\\\\Terminal\\\\WORKBENCH-01' : 'C:\\\\Terminal\\\\WORKBENCH-02'">
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="secondary btn-sm" @click="addInstance">+ Add instance</button>
+      <button class="secondary btn-sm" @click="refreshInstances" :disabled="checkingInstances">
+        {{ checkingInstances ? 'Checking…' : 'Check status' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Settings Panel -->
+  <div class="card" v-if="showSettings">
+    <h3>Bridge Settings</h3>
+    <div class="row">
+      <div class="field">
+        <label>MT5 Terminal Path</label>
+        <input type="text" v-model="settingsForm.terminalPath">
+      </div>
+      <div class="field">
+        <label>SQX Data Directory</label>
+        <input type="text" v-model="settingsForm.sqxDataDir">
+      </div>
+      <div class="field">
+        <label>Symbol Mapping</label>
+        <input type="text" v-model="settingsForm.symbolMapping" placeholder="NAS100=US100.cash|US500=US500.cash">
+      </div>
+    </div>
+    <div class="row">
+      <button @click="saveSettings" :disabled="savingSettings">{{ savingSettings ? 'Saving…' : 'Save' }}</button>
+    </div>
+    <div v-if="settingsMessage" style="font-size:12px;color:var(--success);">{{ settingsMessage }}</div>
+  </div>
+
+  <div v-if="bridgeStatus !== 'online'" class="banner offline">
+    <div v-if="bridgeStatus === 'checking'">Connecting to SQX-MT5 Bridge…</div>
+    <div v-else>
+      Could not connect to the bridge at <code>{{ bridgeUrl }}</code>.
+      Make sure the service is running and press retry.
+      <div style="margin-top:6px;"><button class="secondary" @click="checkBridge">Retry</button></div>
+    </div>
+  </div>
+
+  <template v-if="bridgeStatus === 'online'">
+    <div class="scroll">
+
+      <!-- 1. Strategy -->
+      <div class="card">
+        <h3>1. Strategy</h3>
+        <div class="row">
+          <div class="field">
+            <label>Custom project</label>
+            <select v-model="selectedProject" :disabled="loadingProjects">
+              <option disabled value="">{{ loadingProjects ? 'Loading…' : 'Choose a project' }}</option>
+              <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Databank</label>
+            <select v-model="selectedDatabank" @change="onDatabankChange" :disabled="loadingDatabanks">
+              <option disabled value="">{{ loadingDatabanks ? 'Loading…' : 'Choose a databank' }}</option>
+              <option v-for="d in databanks" :key="d.name" :value="d.name">{{ d.name }} ({{ d.records }})</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Saved strategy</label>
+            <select v-model="selectedStrategyName" :disabled="loadingStrategies || !strategies.length">
+              <option disabled value="">{{ loadingStrategies ? 'Loading…' : (strategies.length ? 'Choose a strategy' : 'This databank is empty') }}</option>
+              <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. MT5 config -->
+      <div class="card" v-if="selectedStrategyName">
+        <h3>2. MT5 test configuration</h3>
+        <div class="row">
+          <div class="field">
+            <label>Symbol (historical data available in your MT5)</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <select v-if="mt5Symbols.length" v-model="form.symbol" style="flex:1;">
+                <option disabled value="">Choose a symbol</option>
+                <option v-for="s in mt5Symbols" :key="s.symbol" :value="s.symbol">{{ s.symbol }}</option>
+              </select>
+              <input v-else type="text" v-model="form.symbol" placeholder="EURUSD" style="flex:1;">
+              <button type="button" class="secondary" @click="refreshSymbols" :disabled="refreshingSymbols"
+                      style="white-space:nowrap;" title="Load symbol list from MT5 broker">
+                {{ refreshingSymbols ? 'Connecting…' : 'Refresh symbols' }}
+              </button>
+            </div>
+            <span v-if="mt5Symbols.length" style="font-size:10px;color:var(--text-muted);">
+              {{ mt5Symbols.length }} symbols
+            </span>
+            <span v-else style="font-size:10px;color:var(--text-muted);">
+              Click "Refresh symbols" or type manually.
+            </span>
+          </div>
+          <div class="field">
+            <label>Period</label>
+            <select v-model="form.period">
+              <option v-for="p in periods" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Date range (same as in SQX)</label>
+            <div v-if="loadingBacktestSettings" class="settings-box">Loading…</div>
+            <template v-else-if="backtestSettingsError">
+              <div class="error-box">{{ backtestSettingsError }}</div>
+              <button type="button" class="secondary" @click="loadBacktestSettings">Retry</button>
+            </template>
+            <div v-else-if="form.fromDate && form.toDate" class="settings-box">{{ form.fromDate }} → {{ form.toDate }}</div>
+            <div v-else class="settings-box">Choose a strategy first.</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field checkbox">
+            <input type="checkbox" id="fw" v-model="form.forwardMode">
+            <label for="fw" style="font-size:12px;color:var(--text-main);">Forward Period</label>
+          </div>
+          <div class="field" v-if="form.forwardMode">
+            <label>Forward Date (from)</label>
+            <input type="date" v-model="form.forwardDate">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Tick modeling</label>
+            <select v-model="form.tickModel">
+              <option value="every_tick_real">Every tick (recommended)</option>
+              <option value="every_tick">Every tick (generated)</option>
+              <option value="ohlc_1min">1 minute OHLC</option>
+              <option value="open_prices">Open prices only</option>
+              <option value="math_calculations">Math calculations</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Optimization</label>
+            <input type="text" value="Disabled" disabled>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Initial deposit (same as in SQX)</label>
+            <div class="settings-box">{{ loadingBacktestSettings ? 'Loading…' : (form.deposit ? form.deposit.toLocaleString() : '—') }}</div>
+          </div>
+          <div class="field">
+            <label>Currency</label>
+            <input type="text" v-model="form.currency">
+          </div>
+          <div class="field">
+            <label>Leverage (1:X)</label>
+            <input type="number" v-model.number="form.leverage">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button @click="runBacktest" :disabled="running || batchRunning || loadingBacktestSettings || !mt5Symbols.length || !form.fromDate || !form.toDate">
+            {{ running ? 'Running…' : 'Run in MT5' }}
+          </button>
+          <button class="secondary" @click="runBatch" :disabled="running || batchRunning || loadingBacktestSettings || !mt5Symbols.length || !strategies.length || !form.symbol">
+            {{ batchRunning ? 'Running batch…' : 'Run all strategies' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 3. Progress -->
+      <div class="card" v-if="phase !== 'idle' && !batchRunning">
+        <h3>3. Progress</h3>
+        <ul class="steps">
+          <li :class="stepClass('export')"><span class="icon">{{ stepIcon('export') }}</span> Exporting MQ5 code from SQX</li>
+          <li :class="stepClass('compile')"><span class="icon">{{ stepIcon('compile') }}</span> Compiling in MetaEditor</li>
+          <li :class="stepClass('test')"><span class="icon">{{ stepIcon('test') }}</span> Running Strategy Tester in MT5</li>
+          <li :class="stepClass('compare')"><span class="icon">{{ stepIcon('compare') }}</span> Comparing results</li>
+        </ul>
+        <div v-if="errorMessage" class="error-box">{{ errorMessage }}</div>
+      </div>
+
+      <!-- 4. Batch progress -->
+      <div class="card" v-if="batchRunning || batchResults.length">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h3>{{ batchRunning ? 'Batch Progress' : 'Batch Results' }}</h3>
+          <button v-if="batchRunning" class="secondary" style="padding:4px 10px;color:var(--danger);" @click="abortBatch">Abort</button>
+        </div>
+        <div v-if="batchRunning" style="font-size:12px;margin-bottom:4px;">
+          {{ batchCompletedCount }} of {{ batchTotal }} completed, {{ batchTotal - batchCompletedCount }} remaining
+        </div>
+        <div v-if="batchRunning" class="batch-progress-bar">
+          <div class="batch-progress-fill" :style="{width: ((batchCompletedCount / batchTotal) * 100) + '%'}"></div>
+        </div>
+        <div v-if="batchRunning && batchErrorMessage" class="error-box">{{ batchErrorMessage }}</div>
+        <div v-if="batchResults.length" style="margin-top:6px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+            {{ batchResults.filter(r => r.status === 'done').length }} succeeded,
+            {{ batchResults.filter(r => r.status === 'error').length }} failed.
+            Click a row to see the SQX vs MT5 comparison.
+          </div>
+          <table class="batch-results">
+            <thead>
+              <tr>
+                <th style="text-align:left;">Strategy</th>
+                <th>Instance</th>
+                <th>SQX Net Profit</th>
+                <th>MT5 Net Profit</th>
+                <th>Diff %</th>
+                <th>MT5 Max DD</th>
+                <th>Trades</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, idx) in batchResults" :key="r.strategyName"
+                  class="batch-row"
+                  :class="{'batch-row-selected': selectedBatchIdx === idx}"
+                  @click="selectBatchResult(idx)">
+                <td style="text-align:left;font-weight:600;">{{ r.strategyName }}</td>
+                <td style="font-size:11px;color:var(--text-muted);">{{ r.instance || '—' }}</td>
+                <td v-if="r.status === 'done'">{{ formatBatchVal(r.sqxStats?.NetProfit) }}</td>
+                <td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.NetProfit) }}</td>
+                <td v-else>—</td>
+                <td v-if="r.status === 'done' && r.sqxStats?.NetProfit && r.mt5Stats?.NetProfit"
+                    :class="batchDiffClass(r.sqxStats.NetProfit, r.mt5Stats.NetProfit)">
+                  {{ batchDiffPct(r.sqxStats.NetProfit, r.mt5Stats.NetProfit) }}
+                </td>
+                <td v-else-if="r.status === 'done'">—</td>
+                <td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.PctDrawdown, true) }}</td>
+                <td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? '—' }}</td>
+                <td v-else>—</td>
+                <td>
+                  <span v-if="r.status === 'done'" style="color:var(--success);">✓ Done</span>
+                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">… Running</span>
+                  <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
+                  <span v-else style="color:var(--danger);" :title="r.error">✗ Error</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="selectedBatchIdx !== null && batchResults[selectedBatchIdx]?.status === 'done'" class="batch-detail">
+          <table class="compare">
+            <thead>
+              <tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in batchResults[selectedBatchIdx].comparison" :key="row.key">
+                <td>{{ row.label }}</td>
+                <td>{{ row.sqxDisplay }}</td>
+                <td>{{ row.mt5Display }}</td>
+                <td :class="row.diffClass">{{ row.diffDisplay }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+              Equity curves — same scale, directly comparable.
+            </div>
+            <div v-if="batchEquityLoading[selectedBatchIdx]" style="font-size:12px;color:var(--text-muted);">Loading…</div>
+            <div v-else-if="batchEquityError(selectedBatchIdx)" class="error-box">{{ batchEquityError(selectedBatchIdx) }}</div>
+            <div v-else class="equity-charts">
+              <div class="equity-chart">
+                <div class="equity-title">SQX</div>
+                <canvas :id="'equity-sqx-' + selectedBatchIdx" height="150"></canvas>
+                <div class="equity-note">{{ equityNote(selectedBatchIdx, 'sqx') }}</div>
+              </div>
+              <div class="equity-chart">
+                <div class="equity-title">MT5</div>
+                <canvas :id="'equity-mt5-' + selectedBatchIdx" height="150"></canvas>
+                <div class="equity-note">{{ equityNote(selectedBatchIdx, 'mt5') }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Comparison -->
+      <div class="card" v-if="comparison.length">
+        <h3>4. SQX vs MT5</h3>
+        <table class="compare">
+          <thead>
+            <tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in comparison" :key="row.key">
+              <td>{{ row.label }}</td>
+              <td>{{ row.sqxDisplay }}</td>
+              <td>{{ row.mt5Display }}</td>
+              <td :class="row.diffClass">{{ row.diffDisplay }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="margin-top:12px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+            Equity curves — same scale, directly comparable.
+          </div>
+          <div v-if="batchEquityLoading['single']" style="font-size:12px;color:var(--text-muted);">Loading…</div>
+          <div v-else-if="batchEquityError('single')" class="error-box">{{ batchEquityError('single') }}</div>
+          <div v-else class="equity-charts">
+            <div class="equity-chart">
+              <div class="equity-title">SQX</div>
+              <canvas id="equity-sqx-single" height="150"></canvas>
+              <div class="equity-note">{{ equityNote('single', 'sqx') }}</div>
+            </div>
+            <div class="equity-chart">
+              <div class="equity-title">MT5</div>
+              <canvas id="equity-mt5-single" height="150"></canvas>
+              <div class="equity-note">{{ equityNote('single', 'mt5') }}</div>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">
+          Differences &gt; 15% in red, 5–15% in amber. Normal for them not to match exactly: spread, slippage, tick modeling.
+        </div>
+      </div>
+
+      <!-- 6. Done -->
+      <div class="card" v-if="phase === 'done'">
+        <h3>✓ Backtest Complete</h3>
+        <div style="font-size:12px;color:var(--success);">
+          {{ lastBacktestName }}
+        </div>
+      </div>
+
+    </div>
+  </template>
+
+  <!-- Activity Log -->
+  <div class="log-panel">
+    <div class="log-header" @click="logExpanded = !logExpanded">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="log-header-title">Activity Log</span>
+        <span v-if="logEntries.length" style="color:var(--text-muted);font-size:10px;">{{ filteredLogEntries().length }} / {{ logEntries.length }}</span>
+        <span v-if="logEntries.some(e => e.level === 'error')" class="log-badge error">errors</span>
+        <span v-else-if="logEntries.some(e => e.level === 'warn')" class="log-badge warn">warns</span>
+      </div>
+      <div class="log-controls" @click.stop>
+        <select v-model="logFilter">
+          <option value="all">All levels</option>
+          <option value="info">Info</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+        </select>
+        <button class="secondary" style="padding:2px 6px;" @click="copyLog">Copy</button>
+        <button class="secondary" style="padding:2px 6px;" @click="clearLog">Clear</button>
+      </div>
+    </div>
+    <div v-if="logExpanded" class="log-body">
+      <div v-if="!filteredLogEntries().length" style="padding:8px 10px;color:var(--text-muted);">No entries.</div>
+      <div v-for="e in filteredLogEntries()" :key="e.id" class="log-entry">
+        <span class="log-ts">{{ e.timestamp.replace('T',' ').slice(11,19) }}</span>
+        <span class="log-level" :class="e.level">{{ e.level.toUpperCase() }}</span>
+        <span class="log-cat">{{ e.category }}</span>
+        <span class="log-msg">{{ e.message }}<span v-if="e.details" class="log-details"> {{ typeof e.details === 'string' ? e.details : JSON.stringify(e.details) }}</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="disclaimer">
+    This analysis is provided strictly for informational and educational purposes within StrategyQuant X. It does not constitute
+    financial, investment, or trading advice. All results, including backtests and simulations, are based on historical data and
+    hypothetical performance, which may not reflect future market conditions. Past performance is not indicative of future results.
+    Trading involves substantial risk, and you should conduct your own independent research and consult a licensed financial advisor
+    before making any investment or trading decisions.
+    <strong>This tool runs a real backtest in MetaTrader 5 and compares it against the SQX backtest; both
+    are still simulations over historical data and may differ from each other and from actual live account execution.</strong>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted, computed, watch, nextTick } = Vue;
+
+// ── Bridge URL ─────────────────────────────────────────────────────
+const BRIDGE_URL = 'http://localhost:8090';
+
+const STATS_LABELS = {
+  NetProfit: 'Net Profit',
+  NumberOfTrades: '# of Trades',
+  ProfitFactor: 'Profit Factor',
+  PctDrawdown: 'Max Drawdown (equity, %)',
+  WinningPct: '% Winning Trades',
+  AvgLoss: 'Average Risk (avg loss)',
+  MaxConsecWins: 'Max Consecutive Wins',
+  MaxConsecLoss: 'Max Consecutive Losses',
+};
+
+createApp({
+  setup() {
+    const bridgeStatus = ref('checking');
+    const bridgeUrl = ref(BRIDGE_URL);
+
+    // ── Activity Log ────────────────────────────────────────────────
+    const LOG_MAX = 500;
+    const logEntries = ref([]);
+    const logFilter = ref('all');
+    const logExpanded = ref(false);
+
+    function addLog(level, category, message, details = null) {
+      logEntries.value.push({
+        id: Date.now() + Math.random(),
+        timestamp: new Date().toISOString(),
+        level, category, message, details,
+      });
+      if (logEntries.value.length > LOG_MAX) {
+        logEntries.value.splice(0, logEntries.value.length - LOG_MAX);
+      }
+    }
+    function logInfo(c, m, d) { addLog('info', c, m, d); }
+    function logWarn(c, m, d) { addLog('warn', c, m, d); }
+    function logError(c, m, d) { addLog('error', c, m, d); }
+    function filteredLogEntries() {
+      return logEntries.value.filter(e => {
+        if (logFilter.value !== 'all' && e.level !== logFilter.value) return false;
+        return true;
+      });
+    }
+    function clearLog() { logEntries.value = []; }
+    function copyLog() {
+      const lines = filteredLogEntries().map(e => {
+        const ts = e.timestamp.replace('T', ' ').slice(0, 19);
+        return `[${ts}] [${e.level.toUpperCase()}] [${e.category}] ${e.message}`;
+      });
+      navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+    }
+    function logTimeSince(startMs) { return ((Date.now() - startMs) / 1000).toFixed(1) + 's'; }
+
+    // ── Strategy cascade ────────────────────────────────────────────
+    const projects = ref([]);
+    const loadingProjects = ref(false);
+    const selectedProject = ref('');
+    const databanks = ref([]);
+    const loadingDatabanks = ref(false);
+    const selectedDatabank = ref('');
+    const strategies = ref([]);
+    const loadingStrategies = ref(false);
+    const selectedStrategyName = ref('');
+
+    async function apiGet(path) {
+      const startMs = Date.now();
+      logInfo('api', 'GET ' + path);
+      const res = await fetch(BRIDGE_URL + path);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      logInfo('api', 'GET ' + path + ' → OK (' + logTimeSince(startMs) + ')');
+      return body;
+    }
+    async function apiPost(path, payload) {
+      const startMs = Date.now();
+      logInfo('api', 'POST ' + path);
+      const res = await fetch(BRIDGE_URL + path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      logInfo('api', 'POST ' + path + ' → OK (' + logTimeSince(startMs) + ')');
+      return body;
+    }
+
+    async function loadProjects() {
+      loadingProjects.value = true;
+      try {
+        const r = await apiGet('/projects');
+        projects.value = r.projects || [];
+        if (!selectedProject.value) selectedProject.value = projects.value[0] || '';
+      } catch (e) { errorMessage.value = 'Could not load projects: ' + e.message; }
+      finally { loadingProjects.value = false; }
+    }
+
+    watch(selectedProject, async (newVal, oldVal) => {
+      if (newVal && newVal !== oldVal) {
+        databanks.value = []; selectedDatabank.value = '';
+        strategies.value = []; selectedStrategyName.value = '';
+        form.symbol = ''; comparison.value = []; phase.value = 'idle';
+        loadingDatabanks.value = true;
+        try {
+          const r = await apiGet('/databanks?project=' + encodeURIComponent(newVal));
+          databanks.value = r.databanks || [];
+          if (databanks.value.length) {
+            selectedDatabank.value = databanks.value[0].name;
+            await loadStrategies();
+          }
+        } catch (e) { errorMessage.value = 'Could not load databanks: ' + e.message; }
+        finally { loadingDatabanks.value = false; }
+      }
+    });
+
+    async function onDatabankChange() {
+      selectedStrategyName.value = ''; strategies.value = [];
+      comparison.value = []; phase.value = 'idle'; errorMessage.value = '';
+      await loadStrategies();
+    }
+
+    async function loadStrategies() {
+      if (!selectedProject.value || !selectedDatabank.value) return;
+      loadingStrategies.value = true;
+      try {
+        const r = await apiGet(
+          '/strategies?project=' + encodeURIComponent(selectedProject.value) +
+          '&databank=' + encodeURIComponent(selectedDatabank.value)
+        );
+        strategies.value = r.strategies || [];
+        if (strategies.value.length) selectedStrategyName.value = strategies.value[0].name;
+      } catch (e) { errorMessage.value = 'Could not load strategies: ' + e.message; }
+      finally { loadingStrategies.value = false; }
+    }
+
+    // ── Settings auto-fill ──────────────────────────────────────────
+    const loadingBacktestSettings = ref(false);
+    const backtestSettingsError = ref('');
+    const form = reactive({
+      symbol: '', period: 'H1', fromDate: '', toDate: '',
+      forwardMode: false, forwardDate: '', tickModel: 'every_tick_real',
+      deposit: null, currency: 'USD', leverage: 100,
+    });
+
+    async function loadBacktestSettings() {
+      form.fromDate = ''; form.toDate = ''; form.deposit = null;
+      if (!selectedProject.value || !selectedDatabank.value || !selectedStrategyName.value) return;
+      loadingBacktestSettings.value = true;
+      backtestSettingsError.value = '';
+      try {
+        const r = await apiGet(
+          '/backtest-settings?project=' + encodeURIComponent(selectedProject.value) +
+          '&databank=' + encodeURIComponent(selectedDatabank.value) +
+          '&strategyName=' + encodeURIComponent(selectedStrategyName.value)
+        );
+        if (r.ok) {
+          form.fromDate = typeof r.fromDate === 'string' ? r.fromDate.replaceAll('.', '-') : '';
+          form.toDate = typeof r.toDate === 'string' ? r.toDate.replaceAll('.', '-') : '';
+          form.deposit = r.initialCapital || null;
+          if (r.symbol && !form.symbol) form.symbol = r.symbol;
+        } else {
+          backtestSettingsError.value = 'Could not load settings: ' + (r.error || 'Unknown');
+        }
+      } catch (e) {
+        backtestSettingsError.value = 'Could not load settings: ' + e.message;
+      } finally { loadingBacktestSettings.value = false; }
+    }
+
+    watch(selectedStrategyName, (newVal, oldVal) => {
+      if (newVal !== oldVal) loadBacktestSettings();
+    });
+
+    // ── Symbols ─────────────────────────────────────────────────────
+    const mt5Symbols = ref([]);
+    const refreshingSymbols = ref(false);
+    const periods = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1', 'MN1'];
+
+    async function refreshSymbols() {
+      if (refreshingSymbols.value) return;
+      refreshingSymbols.value = true;
+      try {
+        const r = await apiGet('/mt5-symbols/live');
+        const list = r.symbols || [];
+        if (!list.length) throw new Error('Empty symbol list');
+        mt5Symbols.value = list;
+        if (form.symbol && !list.some((s) => s.symbol === form.symbol)) {
+          form.symbol = list[0].symbol;
+        }
+        logInfo('api', 'Loaded ' + list.length + ' symbols');
+      } catch (e) { logError('api', 'Symbol refresh failed: ' + e.message); }
+      finally { refreshingSymbols.value = false; }
+    }
+
+    // ── Bridge check ────────────────────────────────────────────────
+    async function checkBridge() {
+      bridgeStatus.value = 'checking';
+      try {
+        await apiGet('/health');
+        bridgeStatus.value = 'online';
+        loadProjects();
+        refreshSymbols();
+        logInfo('health', 'Bridge is ONLINE');
+      } catch (e) {
+        bridgeStatus.value = 'offline';
+        logError('health', 'Bridge is OFFLINE: ' + e.message);
+      }
+    }
+
+    // ── Theme sync via postMessage (from SQX) ──────────────────────
+    function handleMessage(e) {
+      const { type, theme } = e.data || {};
+      if (type === 'SET_THEME') {
+        document.documentElement.setAttribute('data-theme', theme || 'light');
+      }
+      // STRATEGY_DATA: auto-fill when user clicks a strategy in SQX
+      if (type === 'STRATEGY_DATA') {
+        const data = e.data.data;
+        if (data?.projectName && projects.value.includes(data.projectName)) {
+          if (!selectedProject.value) selectedProject.value = data.projectName;
+        }
+      }
+    }
+
+    // ── Backtest run ────────────────────────────────────────────────
+    const phase = ref('idle');
+    const running = computed(() => ['export', 'compile', 'test', 'compare'].includes(phase.value));
+    const errorMessage = ref('');
+    const comparison = ref([]);
+    const lastBacktestName = ref('');
+    const lastAttemptedStep = ref(-1);
+    const STEP_ORDER = ['export', 'compile', 'test', 'compare'];
+    function stepClass(step) {
+      const idx = STEP_ORDER.indexOf(step);
+      const pi = STEP_ORDER.indexOf(phase.value);
+      if (phase.value === 'error') return idx <= lastAttemptedStep.value ? 'error' : '';
+      if (idx < pi) return 'done';
+      if (idx === pi) return 'active';
+      return '';
+    }
+    function stepIcon(step) {
+      const c = stepClass(step);
+      if (c === 'done') return '✓';
+      if (c === 'active') return '…';
+      if (c === 'error') return '✗';
+      return '·';
+    }
+
+    function normalizeStatValue(key, value) {
+      if (key === 'AvgLoss' && typeof value === 'number' && value > 0) return -value;
+      return value;
+    }
+    function diffRow(key, label, sqxVal, mt5Val, isPct) {
+      sqxVal = normalizeStatValue(key, sqxVal);
+      mt5Val = normalizeStatValue(key, mt5Val);
+      const fmt = (v) => (v == null || Number.isNaN(v) ? '—' : (isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })));
+      let diffDisplay = '—', diffClass = '';
+      if (sqxVal != null && mt5Val != null && sqxVal !== 0) {
+        const pct = Math.abs((mt5Val - sqxVal) / sqxVal) * 100;
+        diffDisplay = (mt5Val >= sqxVal ? '+' : '') + ((mt5Val - sqxVal) / sqxVal * 100).toFixed(1) + '%';
+        diffClass = pct > 15 ? 'diff-bad' : pct > 5 ? 'diff-warn' : 'diff-ok';
+      }
+      return { key, label, sqxDisplay: fmt(sqxVal), mt5Display: fmt(mt5Val), diffDisplay, diffClass };
+    }
+    function buildComparison(sqxStats, mt5Stats) {
+      comparison.value = [
+        diffRow('NetProfit', STATS_LABELS.NetProfit, sqxStats.NetProfit, mt5Stats.NetProfit, false),
+        diffRow('NumberOfTrades', STATS_LABELS.NumberOfTrades, sqxStats.NumberOfTrades, mt5Stats.NumberOfTrades, false),
+        diffRow('ProfitFactor', STATS_LABELS.ProfitFactor, sqxStats.ProfitFactor, mt5Stats.ProfitFactor, false),
+        diffRow('PctDrawdown', STATS_LABELS.PctDrawdown, sqxStats.PctDrawdown, mt5Stats.PctDrawdown, true),
+        diffRow('WinningPct', STATS_LABELS.WinningPct, sqxStats.WinningPct, mt5Stats.WinningPct, true),
+        diffRow('AvgLoss', STATS_LABELS.AvgLoss, sqxStats.AvgLoss, mt5Stats.AvgLoss, false),
+        diffRow('MaxConsecWins', STATS_LABELS.MaxConsecWins, sqxStats.MaxConsecWins, mt5Stats.MaxConsecWins, false),
+        diffRow('MaxConsecLoss', STATS_LABELS.MaxConsecLoss, sqxStats.MaxConsecLoss, mt5Stats.MaxConsecLoss, false),
+      ];
+    }
+
+    async function pollBacktest(jobId) {
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000));
+        const job = await apiGet('/backtest/' + jobId + '/status');
+        if (job.status === 'done') return job.result;
+        if (job.status === 'error') throw new Error(job.error || 'The backtest failed in MT5.');
+      }
+    }
+
+    async function runBacktest() {
+      if (!selectedProject.value || !selectedDatabank.value || !selectedStrategyName.value) return;
+      if (!form.fromDate || !form.toDate) return;
+      errorMessage.value = ''; comparison.value = [];
+      clearSingleEquity();
+      const project = selectedProject.value;
+      const databank = selectedDatabank.value;
+      const strategyName = selectedStrategyName.value;
+
+      try {
+        // Step 1: Export MQ5
+        phase.value = 'export';
+        lastAttemptedStep.value = 0;
+
+        // Step 2: Compile
+        phase.value = 'compile';
+        const compileResult = await apiPost('/compile', { project, databank, strategyName });
+        if (!compileResult.success) {
+          throw new Error('Compilation error (' + compileResult.errors + ' errors). Log:\n' + (compileResult.log || '').slice(-800));
+        }
+
+        lastAttemptedStep.value = 1;
+        phase.value = 'test';
+
+        // Step 3: Submit backtest
+        const { jobId } = await apiPost('/backtest', {
+          project, databank, strategyName,
+          expertRelativePath: compileResult.expertRelativePath,
+          ex5Path: compileResult.ex5Path,
+          symbol: form.symbol, period: form.period,
+          fromDate: form.fromDate.replaceAll('-', '.'),
+          toDate: form.toDate.replaceAll('-', '.'),
+          forwardMode: form.forwardMode,
+          forwardDate: form.forwardMode ? form.forwardDate.replaceAll('-', '.') : null,
+          tickModel: form.tickModel,
+          deposit: form.deposit, currency: form.currency, leverage: form.leverage,
+        });
+
+        lastAttemptedStep.value = 2;
+        const mt5Result = await pollBacktest(jobId);
+
+        lastAttemptedStep.value = 3;
+        phase.value = 'compare';
+        const sqxStats = await apiGet(
+          '/stats?project=' + encodeURIComponent(project) +
+          '&databank=' + encodeURIComponent(databank) +
+          '&strategyName=' + encodeURIComponent(strategyName)
+        );
+        buildComparison(sqxStats.stats || {}, mt5Result.stats || {});
+        loadEquityFor('single', { project, databank, strategyName, deposit: form.deposit });
+        phase.value = 'done';
+        lastBacktestName.value = strategyName + ' on ' + form.symbol + ' / ' + form.period;
+      } catch (e) {
+        errorMessage.value = e.message;
+        phase.value = 'error';
+      }
+    }
+
+    // ── Equity curves ───────────────────────────────────────────────
+    const batchEquity = ref({});
+    const batchEquityLoading = ref({});
+    const equityDrawState = {};
+
+    async function loadEquityFor(key, row) {
+      if (batchEquity.value[key]) { await nextTick(); drawBatchEquity(key); return; }
+      batchEquityLoading.value = { ...batchEquityLoading.value, [key]: true };
+      try {
+        const q = '?project=' + encodeURIComponent(row.project || selectedProject.value || '')
+          + '&databank=' + encodeURIComponent(row.databank || selectedDatabank.value || '')
+          + '&strategyName=' + encodeURIComponent(row.strategyName)
+          + '&deposit=' + encodeURIComponent(row.deposit || form.deposit || 10000);
+        const r = await apiGet('/equity' + q);
+        batchEquity.value = { ...batchEquity.value, [key]: r };
+      } catch (e) {
+        batchEquity.value = { ...batchEquity.value, [key]: { deposit: form.deposit || 10000, sqx: null, mt5: null, error: e.message } };
+      } finally {
+        batchEquityLoading.value = { ...batchEquityLoading.value, [key]: false };
+        await nextTick();
+        drawBatchEquity(key);
+      }
+    }
+
+    function clearSingleEquity() {
+      delete batchEquity.value['single'];
+      for (const id of ['equity-sqx-single', 'equity-mt5-single']) {
+        delete equityDrawState[id];
+        const canvas = document.getElementById(id);
+        if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    function batchEquityError(idx) {
+      const d = batchEquity.value[idx];
+      if (!d) return '';
+      const hasAny = ['sqx', 'mt5'].some(k => d[k] && d[k].points && d[k].points.length);
+      if (hasAny) return '';
+      return 'No equity data to chart: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' · ');
+    }
+
+    function fmtMoney(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '—';
+      return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
+
+    function equityNote(idx, which) {
+      const d = batchEquity.value[idx];
+      const side = d && d[which];
+      if (!side) return 'No data';
+      if (!side.points || !side.points.length) return side.error || 'No data';
+      const pts = side.points;
+      return fmtMoney(pts[0][1]) + ' → ' + fmtMoney(pts[pts.length - 1][1])
+        + ' · ' + (pts.length - 1) + ' trades';
+    }
+
+    function drawBatchEquity(idx) {
+      const data = batchEquity.value[idx];
+      if (!data) return;
+      const deposit = data.deposit || 10000;
+      const sqxPts = (data.sqx && data.sqx.points) || [];
+      const mt5Pts = (data.mt5 && data.mt5.points) || [];
+      const values = [deposit];
+      for (const p of sqxPts) values.push(p[1]);
+      for (const p of mt5Pts) values.push(p[1]);
+      let min = Math.min(...values), max = Math.max(...values);
+      const padY = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1;
+      min -= padY; max += padY;
+      for (const [key, points] of [['sqx', sqxPts], ['mt5', mt5Pts]]) {
+        const canvas = document.getElementById('equity-' + key + '-' + idx);
+        if (!canvas) continue;
+        equityDrawState[canvas.id] = { points, min, max, deposit, which: key };
+        paintEquityCanvas(canvas);
+      }
+    }
+
+    function equityColor(which) {
+      const css = getComputedStyle(document.documentElement);
+      return which === 'sqx'
+        ? (css.getPropertyValue('--primary').trim() || '#337ab7')
+        : (css.getPropertyValue('--success').trim() || '#5cb85c');
+    }
+
+    function paintEquityCanvas(canvas) {
+      const state = equityDrawState[canvas.id];
+      if (!state) return;
+      const css = getComputedStyle(document.documentElement);
+      const muted = css.getPropertyValue('--text-muted').trim() || '#888';
+      const grid = css.getPropertyValue('--border-color').trim() || '#ccc';
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth || 300;
+      const h = canvas.clientHeight || 150;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const padL = 50, padR = 8, padT = 8, padB = 8;
+      const iw = Math.max(w - padL - padR, 10);
+      const ih = Math.max(h - padT - padB, 10);
+      const yOf = (v) => padT + ih - ih * ((v - state.min) / Math.max(state.max - state.min, 1e-9));
+      ctx.font = '10px sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'right';
+      for (let i = 0; i <= 4; i++) {
+        const value = state.min + (state.max - state.min) * (i / 4);
+        const y = Math.round(yOf(value)) + 0.5;
+        ctx.strokeStyle = grid; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+        ctx.fillStyle = muted; ctx.fillText(fmtMoney(value), padL - 4, y);
+      }
+      const yDep = Math.round(yOf(state.deposit)) + 0.5;
+      ctx.setLineDash([4, 3]); ctx.strokeStyle = muted;
+      ctx.beginPath(); ctx.moveTo(padL, yDep); ctx.lineTo(w - padR, yDep); ctx.stroke();
+      ctx.setLineDash([]);
+      const pts = state.points;
+      if (!pts.length) {
+        ctx.fillStyle = muted; ctx.textAlign = 'center';
+        ctx.fillText('No data', padL + iw / 2, padT + ih / 2);
+        return;
+      }
+      const t0 = pts[0][0];
+      const span = Math.max(pts[pts.length - 1][0] - t0, 1);
+      const xOf = (t) => padL + iw * ((t - t0) / span);
+      const color = equityColor(state.which);
+      ctx.beginPath();
+      pts.forEach((p, i) => { const x = xOf(p[0]), y = yOf(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.lineTo(xOf(pts[pts.length - 1][0]), padT + ih);
+      ctx.lineTo(xOf(t0), padT + ih);
+      ctx.closePath();
+      ctx.fillStyle = color + '26'; ctx.fill();
+    }
+
+    watch(selectedBatchIdx, (idx) => {
+      if (idx !== null && idx !== undefined) loadBatchEquity(idx);
+    });
+    async function loadBatchEquity(idx) {
+      const row = batchResults.value[idx];
+      if (!row || row.status !== 'done') return;
+      await loadEquityFor(idx, row);
+    }
+
+    // ── Batch mode ──────────────────────────────────────────────────
+    const batchRunning = ref(false);
+    const batchResults = ref([]);
+    const batchTotal = ref(0);
+    const batchCompletedCount = ref(0);
+    const batchErrorMessage = ref('');
+    const selectedBatchIdx = ref(null);
+    let batchAbort = false;
+
+    function formatBatchVal(v, isPct) {
+      if (v == null || Number.isNaN(v)) return '—';
+      return isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+    function batchDiffPct(sqxVal, mt5Val) {
+      if (!sqxVal || !mt5Val) return '—';
+      return ((mt5Val - sqxVal) / Math.abs(sqxVal) * 100 >= 0 ? '+' : '') + ((mt5Val - sqxVal) / Math.abs(sqxVal) * 100).toFixed(1) + '%';
+    }
+    function batchDiffClass(sqxVal, mt5Val) {
+      if (!sqxVal || !mt5Val) return '';
+      return Math.abs((mt5Val - sqxVal) / sqxVal) * 100 > 15 ? 'diff-bad' : Math.abs((mt5Val - sqxVal) / sqxVal) * 100 > 5 ? 'diff-warn' : 'diff-ok';
+    }
+    function selectBatchResult(idx) { selectedBatchIdx.value = selectedBatchIdx.value === idx ? null : idx; }
+
+    async function runBatch() {
+      if (!selectedProject.value || !selectedDatabank.value || !strategies.value.length || !form.symbol) return;
+      const enabledInstances = getEnabledInstances();
+      if (!enabledInstances.length) {
+        alert('No MT5 instances are enabled and online.');
+        return;
+      }
+      logInfo('batch', '=== BATCH START: ' + strategies.value.length + ' strategies across ' + enabledInstances.length + ' instance(s) ===');
+      batchRunning.value = true;
+      batchResults.value = [];
+      batchTotal.value = strategies.value.length;
+      batchCompletedCount.value = 0;
+      batchErrorMessage.value = '';
+      selectedBatchIdx.value = null;
+      batchAbort = false;
+      const project = selectedProject.value;
+      const databank = selectedDatabank.value;
+      const queue = strategies.value.map(s => s.name);
+
+      // Distribute strategies across instances
+      const instanceQueues = enabledInstances.map(() => []);
+      for (let i = 0; i < queue.length; i++) {
+        instanceQueues[i % enabledInstances.length].push(queue[i]);
+      }
+
+      // Run each instance's queue concurrently
+      const instancePromises = enabledInstances.map(async (inst, instIdx) => {
+        for (const strategyName of instanceQueues[instIdx]) {
+          if (batchAbort) break;
+          const globalIdx = queue.indexOf(strategyName);
+          batchResults.value.splice(globalIdx, 1, {
+            status: 'running', strategyName,
+            instance: 'Instance ' + (instIdx + 1),
+            project, databank, deposit: form.deposit,
+            sqxStats: null, mt5Stats: null, comparison: [],
+          });
+          try {
+            const result = await runSingleInBatch(instIdx + 1, project, databank, strategyName);
+            result.instance = 'Instance ' + (instIdx + 1);
+            batchResults.value.splice(globalIdx, 1, result);
+          } catch (e) {
+            batchResults.value.splice(globalIdx, 1, {
+              status: 'error', strategyName,
+              instance: 'Instance ' + (instIdx + 1),
+              error: e.message, project, databank, deposit: form.deposit,
+              sqxStats: null, mt5Stats: null, comparison: [],
+            });
+            batchErrorMessage.value = strategyName + ': ' + e.message;
+          }
+          batchCompletedCount.value++;
+        }
+      });
+      await Promise.all(instancePromises);
+      const succeeded = batchResults.value.filter(r => r.status === 'done').length;
+      const failed = batchResults.value.filter(r => r.status === 'error').length;
+      logInfo('batch', '=== BATCH COMPLETE: ' + succeeded + ' succeeded, ' + failed + ' failed ===');
+      batchRunning.value = false;
+    }
+
+    function abortBatch() {
+      if (!confirm('Abort batch?')) return;
+      batchAbort = true;
+    }
+
+    async function runSingleInBatch(instLabel, project, databank, strategyName) {
+      const startMs = Date.now();
+      try {
+        // Compile
+        const compileResult = await apiPost('/compile', { project, databank, strategyName });
+        if (!compileResult.success) throw new Error('Compilation failed.');
+
+        // Backtest
+        const { jobId } = await apiPost('/backtest', {
+          project, databank, strategyName,
+          expertRelativePath: compileResult.expertRelativePath,
+          ex5Path: compileResult.ex5Path,
+          symbol: form.symbol, period: form.period,
+          fromDate: form.fromDate.replaceAll('-', '.'),
+          toDate: form.toDate.replaceAll('-', '.'),
+          tickModel: form.tickModel,
+          deposit: form.deposit, currency: form.currency, leverage: form.leverage,
+        });
+        const mt5Result = await pollBacktest(jobId);
+
+        // Stats
+        const sqxStats = await apiGet(
+          '/stats?project=' + encodeURIComponent(project) +
+          '&databank=' + encodeURIComponent(databank) +
+          '&strategyName=' + encodeURIComponent(strategyName)
+        );
+
+        const comp = [
+          diffRow('NetProfit', STATS_LABELS.NetProfit, (sqxStats.stats || {}).NetProfit, (mt5Result.stats || {}).NetProfit, false),
+          diffRow('NumberOfTrades', STATS_LABELS.NumberOfTrades, (sqxStats.stats || {}).NumberOfTrades, (mt5Result.stats || {}).NumberOfTrades, false),
+          diffRow('ProfitFactor', STATS_LABELS.ProfitFactor, (sqxStats.stats || {}).ProfitFactor, (mt5Result.stats || {}).ProfitFactor, false),
+          diffRow('PctDrawdown', STATS_LABELS.PctDrawdown, (sqxStats.stats || {}).PctDrawdown, (mt5Result.stats || {}).PctDrawdown, true),
+          diffRow('WinningPct', STATS_LABELS.WinningPct, (sqxStats.stats || {}).WinningPct, (mt5Result.stats || {}).WinningPct, true),
+          diffRow('AvgLoss', STATS_LABELS.AvgLoss, (sqxStats.stats || {}).AvgLoss, (mt5Result.stats || {}).AvgLoss, false),
+        ];
+
+        logInfo('batch', '[' + instLabel + '] ' + strategyName + ': DONE (' + logTimeSince(startMs) + ')');
+        return { status: 'done', strategyName, project, databank, deposit: form.deposit,
+                 sqxStats: sqxStats.stats || {}, mt5Stats: mt5Result.stats || {}, comparison: comp };
+      } catch (e) {
+        logError('batch', '[' + instLabel + '] ' + strategyName + ': FAILED: ' + e.message);
+        throw e;
+      }
+    }
+
+    // ── MT5 Instances ───────────────────────────────────────────────
+    const INSTANCES_KEY = 'mt5b_instances';
+    const defaultInstances = [
+      { enabled: true, terminalPath: '' },
+    ];
+    function loadInstances() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(INSTANCES_KEY));
+        if (saved && Array.isArray(saved)) return saved;
+      } catch {}
+      return defaultInstances.map(i => ({ ...i }));
+    }
+    const instances = ref(loadInstances());
+    function saveInstances() { localStorage.setItem(INSTANCES_KEY, JSON.stringify(instances.value)); }
+    function addInstance() {
+      instances.value.push({ enabled: true, terminalPath: '' });
+      saveInstances();
+    }
+    function removeInstance(idx) {
+      if (idx === 0) return;
+      instances.value.splice(idx, 1);
+      saveInstances();
+    }
+    const checkingInstances = ref(false);
+    async function refreshInstances() {
+      checkingInstances.value = true;
+      instances.value.forEach((inst, idx) => {
+        inst.status = inst.terminalPath ? 'checking' : 'offline';
+      });
+      saveInstances();
+      // Check each instance's terminal exists
+      for (let i = 0; i < instances.value.length; i++) {
+        const inst = instances.value[i];
+        if (inst.terminalPath) {
+          // Check by pinging the bridge
+          try {
+            const res = await fetch(BRIDGE_URL + '/mt5-symbols/live');
+            // We can't distinguish instances from the bridge, so mark online
+            inst.status = 'online';
+          } catch {
+            inst.status = 'checking';
+          }
+        }
+      }
+      saveInstances();
+      checkingInstances.value = false;
+    }
+    function getEnabledInstances() {
+      return instances.value.filter(i => i.enabled !== false && i.terminalPath);
+    }
+
+    // ── UI toggles ──────────────────────────────────────────────────
+    const showInstances = ref(false);
+    const showSettings = ref(false);
+    const settingsForm = reactive({
+      terminalPath: '', sqxDataDir: '', symbolMapping: '',
+    });
+    const savingSettings = ref(false);
+    const settingsMessage = ref('');
+
+    function toggleInstances() { showInstances.value = !showInstances.value; }
+    function toggleSettings() {
+      showSettings.value = !showSettings.value;
+      if (showSettings.value) loadSettings();
+    }
+    async function loadSettings() {
+      try {
+        const cfg = await apiGet('/settings/json');
+        settingsForm.terminalPath = cfg.terminalPath || '';
+        settingsForm.sqxDataDir = cfg.sqxDataDir || '';
+        settingsForm.symbolMapping = cfg.symbolMapping || '';
+      } catch {}
+    }
+    async function saveSettings() {
+      savingSettings.value = true;
+      settingsMessage.value = '';
+      try {
+        // Update env file
+        const lines = [];
+        lines.push('BRIDGE_TERMINAL_PATH=' + settingsForm.terminalPath);
+        lines.push('BRIDGE_SQX_DATA_DIR=' + settingsForm.sqxDataDir);
+        lines.push('BRIDGE_SYMBOL_MAPPING=' + settingsForm.symbolMapping);
+        lines.push('');
+        const fs = require('fs');
+        fs.writeFileSync(require('path').join(__dirname, '..', '.env'), lines.join('\n'));
+        settingsMessage.value = 'Saved. Reload the plugin to apply.';
+      } catch (e) {
+        settingsMessage.value = 'Error: ' + e.message;
+      } finally {
+        savingSettings.value = false;
+      }
+    }
+
+    // ── Mount ───────────────────────────────────────────────────────
+    onMounted(async () => {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+      window.addEventListener('message', handleMessage);
+      checkBridge();
+    });
+
+    return {
+      bridgeStatus, bridgeUrl, checkBridge,
+      // Strategy cascade
+      projects, loadingProjects, selectedProject,
+      databanks, loadingDatabanks, selectedDatabank,
+      strategies, loadingStrategies, selectedStrategyName,
+      // Settings
+      form, periods, refreshSymbols, refreshingSymbols,
+      loadBacktestSettings, loadingBacktestSettings, backtestSettingsError,
+      mt5Symbols,
+      // Backtest
+      runBacktest, phase, running, errorMessage, comparison,
+      stepClass, stepIcon, lastBacktestName,
+      // Batch
+      batchRunning, batchResults, batchTotal, batchCompletedCount,
+      batchErrorMessage, selectedBatchIdx, runBatch, abortBatch,
+      formatBatchVal, batchDiffPct, batchDiffClass, selectBatchResult,
+      batchEquityLoading, batchEquityError, equityNote,
+      loadBatchEquity,
+      // Instances
+      showInstances, instances, addInstance, removeInstance, saveInstances,
+      refreshInstances, checkingInstances,
+      // Settings
+      showSettings, settingsForm, savingSettings, settingsMessage,
+      toggleSettings, toggleInstances, saveSettings,
+      // Log
+      logEntries, logFilter, logExpanded, filteredLogEntries, clearLog, copyLog,
+    };
+  },
+}).mount('#app');
+</script>
+</body>
+</html>
