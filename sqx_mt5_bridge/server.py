@@ -581,25 +581,39 @@ def get_portfolio_strategies(
             strategy_dirs = sorted(set(strategy_dirs))
 
             for strat_name in strategy_dirs:
-                # Search for the strategy .sqx file across ALL projects
+                # Search for the strategy .sqx file — prioritize portfolio's project first
                 projects_dir = Path(settings.sqx_data_dir) / "projects"
                 found_path = None
-                for proj_d in projects_dir.iterdir():
-                    if not proj_d.is_dir():
-                        continue
-                    sqx_file = proj_d / "databanks" / "Results" / f"{strat_name}.sqx"
+
+                # Helper to search one project for a strategy file
+                def _find_in_project(proj_path):
+                    # Check Results databank first
+                    sqx_file = proj_path / "databanks" / "Results" / f"{strat_name}.sqx"
                     if sqx_file.is_file():
-                        found_path = sqx_file
-                        break
-                    # Also check other databanks (e.g. "Simple strategies")
-                    for db_d in proj_d.glob("databanks/*"):
+                        return sqx_file
+                    # Then check other databanks
+                    for db_d in proj_path.glob("databanks/*"):
                         if db_d.is_dir():
                             cand = db_d / f"{strat_name}.sqx"
                             if cand.is_file():
-                                found_path = cand
-                                break
-                    if found_path:
-                        break
+                                return cand
+                    return None
+
+                # 1. Search the portfolio's own project first
+                portfolio_project_dir = projects_dir / project
+                if portfolio_project_dir.is_dir():
+                    found_path = _find_in_project(portfolio_project_dir)
+
+                # 2. Fall back to other projects
+                if not found_path:
+                    for proj_d in projects_dir.iterdir():
+                        if not proj_d.is_dir():
+                            continue
+                        if proj_d == portfolio_project_dir:
+                            continue
+                        found_path = _find_in_project(proj_d)
+                        if found_path:
+                            break
 
                 if found_path and found_path.is_file():
                     try:
@@ -1471,6 +1485,8 @@ async def _run_backtest_job(job: BacktestJob):
         # into the specified folder (Reports) instead of install root.
         f"Report={report_path_abs}",
         "ReplaceReport=1",
+        # Disable SQX info panel to speed up backtests
+        "InpsqDisplayInfoPanel=false",
         "ShutdownTerminal=1",
     ]
 

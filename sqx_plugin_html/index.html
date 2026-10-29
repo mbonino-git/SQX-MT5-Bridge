@@ -906,7 +906,6 @@ createApp({
 
     watch(selectedProject, async (newVal, oldVal) => {
       if (newVal && newVal !== oldVal) {
-        portfolioProject.value = newVal;
         databanks.value = []; selectedDatabank.value = '';
         strategies.value = []; selectedStrategyName.value = '';
         form.symbol = ''; comparison.value = []; phase.value = 'idle';
@@ -914,8 +913,10 @@ createApp({
         try {
           const r = await apiGet('/databanks?project=' + encodeURIComponent(newVal));
           databanks.value = r.databanks || [];
-          if (databanks.value.length) {
-            selectedDatabank.value = databanks.value[0].name;
+          // Default to "Results" databank if available, else first one
+          const resultsDb = databanks.value.find(d => d.name === 'Results');
+          selectedDatabank.value = (resultsDb || databanks.value[0] || {}).name || '';
+          if (selectedDatabank.value) {
             await loadStrategies();
           }
         } catch (e) { errorMessage.value = 'Could not load databanks: ' + e.message; }
@@ -925,7 +926,6 @@ createApp({
 
     watch(selectedDatabank, async (newVal, oldVal) => {
       if (newVal && newVal !== oldVal) {
-        portfolioDatabank.value = newVal;
         selectedStrategyName.value = ''; strategies.value = [];
         comparison.value = []; phase.value = 'idle'; errorMessage.value = '';
         await loadStrategies();
@@ -996,22 +996,13 @@ createApp({
       } finally { loadingPortfolios.value = false; }
     }
 
-    // Reset portfolio selections when project/databank changes
-    watch(portfolioProject, () => {
-      portfolioDatabank.value = '';
-      selectedPortfolio.value = '';
-      portfolioStrategies.value = [];
-      portfolioResults.value = [];
-      portfolios.value = [];
-    });
-
-    watch(portfolioDatabank, () => {
-      selectedPortfolio.value = '';
-      portfolioStrategies.value = [];
-      portfolioResults.value = [];
-      portfolios.value = [];
-      if (portfolioProject.value && portfolioDatabank.value) {
-        loadPortfolios();
+    // Reset portfolio selections when project changes
+    watch(portfolioProject, (newVal, oldVal) => {
+      if (newVal && newVal !== oldVal) {
+        selectedPortfolio.value = '';
+        portfolioStrategies.value = [];
+        portfolioResults.value = [];
+        portfolios.value = [];
       }
     });
 
@@ -1791,7 +1782,17 @@ createApp({
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
       window.addEventListener('message', handleMessage);
       checkBridge();
+      // Load portfolio list after initial project/databank are set
+      await new Promise(r => setTimeout(r, 1000));
+      if (portfolioProject.value && portfolioDatabank.value) {
+        loadPortfolios();
+      }
     });
+
+    // Default portfolio databank to "Results" if not yet set
+    if (!portfolioDatabank.value) {
+      portfolioDatabank.value = 'Results';
+    }
 
     return {
       bridgeStatus, bridgeUrl, checkBridge,
