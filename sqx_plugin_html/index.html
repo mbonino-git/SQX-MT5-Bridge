@@ -906,6 +906,7 @@ createApp({
 
     watch(selectedProject, async (newVal, oldVal) => {
       if (newVal && newVal !== oldVal) {
+        portfolioProject.value = newVal;  // Sync for portfolio auto-select
         databanks.value = []; selectedDatabank.value = '';
         strategies.value = []; selectedStrategyName.value = '';
         form.symbol = ''; comparison.value = []; phase.value = 'idle';
@@ -1778,12 +1779,17 @@ createApp({
       }
     }
 
-    // Auto-select first databank with records > 0 for portfolio section
+    // Auto-select databank with portfolio .sqx files for portfolio section
     function _selectPortfolioDatabank() {
       if (!portfolioProject.value || !databanks.value.length) return;
-      const hasRecords = databanks.value.find(d => d.records && d.records > 0);
-      if (hasRecords && (!portfolioDatabank.value || !portfolios.value.length)) {
-        portfolioDatabank.value = hasRecords.name;
+      // Prefer "Portfolios" databank if it exists
+      let candidate = databanks.value.find(d => d.name === 'Portfolios');
+      if (!candidate) {
+        // Fall back to any databank with records > 0
+        candidate = databanks.value.find(d => d.records && d.records > 0);
+      }
+      if (candidate && candidate.name !== portfolioDatabank.value) {
+        portfolioDatabank.value = candidate.name;
         loadPortfolios();
       }
     }
