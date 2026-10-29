@@ -919,6 +919,8 @@ createApp({
           if (selectedDatabank.value) {
             await loadStrategies();
           }
+          // Also auto-select portfolio databank
+          _selectPortfolioDatabank();
         } catch (e) { errorMessage.value = 'Could not load databanks: ' + e.message; }
         finally { loadingDatabanks.value = false; }
       }
@@ -1776,6 +1778,16 @@ createApp({
       }
     }
 
+    // Auto-select first databank with records > 0 for portfolio section
+    function _selectPortfolioDatabank() {
+      if (!portfolioProject.value || !databanks.value.length) return;
+      const hasRecords = databanks.value.find(d => d.records && d.records > 0);
+      if (hasRecords && (!portfolioDatabank.value || !portfolios.value.length)) {
+        portfolioDatabank.value = hasRecords.name;
+        loadPortfolios();
+      }
+    }
+
     // ── Mount ───────────────────────────────────────────────────────
     onMounted(async () => {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1786,13 +1798,10 @@ createApp({
       await new Promise(r => setTimeout(r, 1000));
       if (portfolioProject.value && portfolioDatabank.value) {
         loadPortfolios();
+      } else {
+        _selectPortfolioDatabank();
       }
     });
-
-    // Default portfolio databank to "Results" if not yet set
-    if (!portfolioDatabank.value) {
-      portfolioDatabank.value = 'Results';
-    }
 
     return {
       bridgeStatus, bridgeUrl, checkBridge,
