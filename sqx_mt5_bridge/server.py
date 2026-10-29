@@ -526,7 +526,279 @@ def list_strategies(
             {"name": f.stem} for f in sorted(db_dir.glob("*.sqx"))
         ]
         return {"strategies": strategies}
-    return {"strategies": []}
+
+
+@app.get("/list-portfolios")
+def list_portfolios(
+    project: str = Query(..., description="SQX project name"),
+    databank: str = Query(..., description="SQX databank name"),
+):
+    """List portfolio .sqx files in a databank."""
+    db_dir = Path(settings.sqx_data_dir) / "projects" / project / "databanks" / databank
+    if not db_dir.is_dir():
+        return {"portfolios": []}
+    portfolios = sorted([f.stem for f in db_dir.glob("*.sqx")])
+    return {"portfolios": portfolios}
+
+
+@app.get("/portfolio-strategies")
+def get_portfolio_strategies(
+    project: str = Query(..., description="SQX project name"),
+    databank: str = Query(..., description="SQX databank name (e.g. Portfolios)"),
+    portfolio: str = Query(..., description="Portfolio .sqx filename (without .sqx extension)"),
+):
+    """Parse a portfolio .sqx file and return the list of strategies with their settings.
+
+    Reads the portfolio .sqx from disk, extracts strategy names from the Results/
+    directory structure, and for each strategy reads its individual .sqx file
+    to get symbol, timeframe, and date range.
+    """
+    import zipfile
+
+    portfolio_path = Path(settings.sqx_data_dir) / "projects" / project / "databanks" / databank / f"{portfolio}.sqx"
+    if not portfolio_path.is_file():
+        return {"ok": False, "error": f"Portfolio not found: {portfolio}.sqx"}
+
+    strategies = []
+    results_pattern = re.compile(r'^Results/([^:]+):\s+([^\s]+)/dailyEquity\.bin$')
+
+    try:
+        with zipfile.ZipFile(portfolio_path) as z:
+            ls_content = z.read('lastSettings.xml').decode('utf-8', errors='replace')
+
+            # Portfolio-level settings
+            setup_match = re.search(r'<Setup\s+dateFrom="([\d.]+)"\s+dateTo="([\d.]*)"', ls_content)
+            capital_match = re.search(r'<InitialCapital>([\d.]+)</InitialCapital>', ls_content)
+
+            # Extract strategy entries from Results/ directory listing
+            all_names = z.namelist()
+            strategy_dirs = []
+            for name in all_names:
+                m = results_pattern.match(name)
+                if m:
+                    strategy_dirs.append(m.group(1))
+            # Deduplicate (one dir per strategy)
+            strategy_dirs = sorted(set(strategy_dirs))
+
+            for strat_name in strategy_dirs:
+                # Search for the strategy .sqx file across ALL projects
+                projects_dir = Path(settings.sqx_data_dir) / "projects"
+                found_path = None
+                for proj_d in projects_dir.iterdir():
+                    if not proj_d.is_dir():
+                        continue
+                    sqx_file = proj_d / "databanks" / "Results" / f"{strat_name}.sqx"
+                    if sqx_file.is_file():
+                        found_path = sqx_file
+                        break
+                    # Also check other databanks (e.g. "Simple strategies")
+                    for db_d in proj_d.glob("databanks/*"):
+                        if db_d.is_dir():
+                            cand = db_d / f"{strat_name}.sqx"
+                            if cand.is_file():
+                                found_path = cand
+                                break
+                    if found_path:
+                        break
+
+                if found_path and found_path.is_file():
+                    try:
+                        with zipfile.ZipFile(found_path) as sz:
+                            if "lastSettings.xml" in sz.namelist():
+                                strat_xml = sz.read("lastSettings.xml").decode("utf-8", errors="replace")
+                                s_setup = re.search(r'<Setup\s+dateFrom="([\d.]+)"\s+dateTo="([\d.]*)"', strat_xml)
+                                s_chart = re.search(r'<Chart\b[^>]*symbol="([^"]*)"[^>]*timeframe="([^"]*)"', strat_xml)
+                                if not s_chart:
+                                    s_chart = re.search(r'<Chart\b[^>]*timeframe="([^"]*)"[^>]*symbol="([^"]*)"', strat_xml)
+                                s_capital = re.search(r'<InitialCapital>([\d.]+)</InitialCapital>', strat_xml)
+
+                                raw_symbol = s_chart.group(1) if s_chart else None
+                                resolved_symbol = _resolve_mt5_symbol(raw_symbol) if raw_symbol else None
+                                timeframe = s_chart.group(2) if s_chart else None
+
+                                strategies.append({
+                                    "name": strat_name,
+                                    "symbol": resolved_symbol,
+                                    "raw_symbol": raw_symbol,
+                                    "timeframe": timeframe,
+                                    "from_date": s_setup.group(1) if s_setup else None,
+                                    "to_date": s_setup.group(2) if s_setup else None,
+                                    "initial_capital": float(s_capital.group(1)) if s_capital else None,
+                                })
+                    except Exception as e:
+                        strategies.append({
+                            "name": strat_name,
+                            "error": f"Could not read settings: {e}",
+                        })
+                else:
+                    strategies.append({
+                        "name": strat_name,
+                        "error": "Strategy .sqx file not found in any project",
+                    })
+
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to parse portfolio: {e}"}
+
+    return {
+        "ok": True,
+        "portfolio": portfolio,
+        "fromDate": setup_match.group(1) if setup_match else None,
+        "toDate": setup_match.group(2) if setup_match else None,
+        "initialCapital": float(capital_match.group(1)) if capital_match else 10000.0,
+        "strategies": strategies,
+        "strategyCount": len(strategies),
+    }
+
+
+# ── Portfolio Backtest Job Tracking ─────────────────────────────────
+
+_portfolio_backtest_jobs: dict[str, dict] = {}
+
+
+@app.post("/portfolio/backtest")
+async def submit_portfolio_backtest(body: dict[str, Any]):
+    """Submit batch backtests for all strategies in a portfolio.
+
+    Request body:
+        {
+            "project": "...", "databank": "Portfolios", "portfolio": "Portfolio",
+            "symbol": "...", "period": "M30",
+            "fromDate": "2022-01-01", "toDate": "2026-10-16",
+            "deposit": 10000, "currency": "USD", "leverage": 100,
+            "tickModel": "every_tick_real"
+        }
+
+    Returns: { "portfolioKey": "...", "jobs": [{ "index": 0, "jobId": "...", "strategy": "..." }] }
+    """
+    project = body.get("project", "")
+    databank = body.get("databank", "")
+    portfolio = body.get("portfolio", "")
+    symbol_override = body.get("symbol")
+    period = body.get("period", "M30")
+    from_date = body.get("fromDate", "2022-01-01")
+    to_date = body.get("toDate", "2026-10-16")
+    deposit = body.get("deposit", 10000)
+    currency = body.get("currency", "USD")
+    leverage = body.get("leverage", 100)
+    tick_model = body.get("tickModel", "every_tick_real")
+
+    portfolio_key = f"{project}__{databank}__{portfolio}"
+
+    # Parse portfolio strategies
+    strategies_resp = get_portfolio_strategies(project=project, databank=databank, portfolio=portfolio)
+    if not strategies_resp.get("ok"):
+        return {"ok": False, "error": strategies_resp.get("error", "Failed to parse portfolio")}
+
+    strategy_list = strategies_resp["strategies"]
+    job_list = []
+    skipped = 0
+
+    for idx, strat in enumerate(strategy_list):
+        if "error" in strat or not strat.get("symbol"):
+            skipped += 1
+            continue
+
+        # Submit backtest
+        backtest_body = {
+            "project": project,
+            "databank": "Results",
+            "strategyName": strat["name"],
+            "symbol": strat["symbol"],
+            "period": strat.get("timeframe") or period,
+            "fromDate": strat.get("from_date") and strat["from_date"].replace(".", "-") or from_date,
+            "toDate": strat.get("to_date") and strat["to_date"].replace(".", "-") or to_date,
+            "deposit": strat.get("initial_capital") or deposit,
+            "currency": currency,
+            "leverage": leverage,
+            "tickModel": tick_model,
+        }
+
+        resp = await submit_backtest(backtest_body)
+        if "jobId" in resp:
+            job_list.append({
+                "index": idx,
+                "jobId": resp["jobId"],
+                "strategy": strat["name"],
+                "status": "pending",
+            })
+        else:
+            skipped += 1
+            job_list.append({
+                "index": idx,
+                "jobId": None,
+                "strategy": strat["name"],
+                "status": "failed",
+                "error": resp.get("error", "Unknown error"),
+            })
+
+    _portfolio_backtest_jobs[portfolio_key] = {
+        "project": project,
+        "databank": databank,
+        "portfolio": portfolio,
+        "strategies": strategy_list,
+        "jobs": job_list,
+        "total": len(strategy_list),
+        "completed": 0,
+        "deposit": deposit,
+        "started_at": time.time(),
+    }
+
+    return {
+        "ok": True,
+        "portfolioKey": portfolio_key,
+        "jobs": job_list,
+        "total": len(job_list),
+        "skipped": skipped,
+    }
+
+
+@app.get("/portfolio-status")
+def get_portfolio_status(portfolio_key: str = Query(...)):
+    """Get the status of a portfolio backtest job.
+
+    Returns: { "ok": true, "portfolioKey": "...", "jobs": [...], "total": N, "completed": N, "progress": 0.0 }
+    """
+    job_info = _portfolio_backtest_jobs.get(portfolio_key)
+    if not job_info:
+        return {"ok": False, "error": "Portfolio backtest not found"}
+
+    # Update completed count from DB
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT status FROM jobs WHERE id IN (" + ",".join(["?"] * len(job_info["jobs"])) + ")",
+        [j["jobId"] for j in job_info["jobs"] if j.get("jobId")],
+    ).fetchall()
+    conn.close()
+
+    completed = sum(1 for r in rows if r[0] in ("done", "error"))
+    job_info["completed"] = completed
+
+    for j in job_info["jobs"]:
+        j["project"] = job_info.get("project", "")
+        j["databank"] = "Results"
+        j["deposit"] = job_info.get("deposit", 10000)
+        if j.get("jobId"):
+            status_row = conn.execute(
+                "SELECT status, result, error FROM jobs WHERE id = ?", (j["jobId"],)
+            ).fetchone()
+            if status_row:
+                j["status"] = status_row[0]
+                if status_row[1]:
+                    try:
+                        j["result"] = json.loads(status_row[1])
+                    except Exception:
+                        pass
+    # Re-close since we already closed above
+    _portfolio_backtest_jobs[portfolio_key] = job_info
+
+    return {
+        "ok": True,
+        "portfolioKey": portfolio_key,
+        "jobs": job_info["jobs"],
+        "total": job_info["total"],
+        "completed": completed,
+        "progress": round(completed / max(job_info["total"], 1), 2),
+    }
 
 
 @app.get("/stats")
@@ -804,32 +1076,51 @@ def mt5_symbols_legacy():
 # ── Backtest Settings Extraction ────────────────────────────────────
 
 
+def _read_sqx_last_settings(project: str, databank: str, strategy_name: str) -> str | None:
+    """Read lastSettings.xml from a .sqx strategy file on disk.
+
+    Strategy names in SQX may contain spaces (e.g. "P0005-XAUUSD-H1- EOD-XU...").
+    We match by normalizing whitespace: compare strategy_name with spaces removed
+    against the filename stem with spaces removed.
+    """
+    import zipfile
+    sqx_dir = Path(settings.sqx_data_dir) / "projects" / project / "databanks" / databank
+    if not sqx_dir.is_dir():
+        return None
+    name_norm = strategy_name.replace(" ", "").replace(" ", "")
+    candidates = list(sqx_dir.glob("*.sqx"))
+    for f in candidates:
+        stem_norm = f.stem.replace(" ", "").replace(" ", "")
+        if stem_norm == name_norm or stem_norm.startswith(name_norm):
+            try:
+                with zipfile.ZipFile(f) as z:
+                    if "lastSettings.xml" in z.namelist():
+                        return z.read("lastSettings.xml").decode("utf-8", errors="replace")
+            except Exception:
+                pass
+    return None
+
+
 @app.get("/backtest-settings")
 def get_backtest_settings(
     project: str = Query(...),
     databank: str = Query(...),
     strategy_name: str = Query(...),
 ):
+    # 1) Try SQX's resultsPlugins/settings endpoint
     raw_xml = sqx_client.get_strategy_settings(
         project=project, databank=databank, strategy_name=strategy_name,
         sqx_host=settings.sqx_host, sqx_port=None,
     )
+    # 2) Fall back to parsing lastSettings.xml from the .sqx file on disk
     if raw_xml is None:
-        return {"ok": False, "error": "Failed to retrieve strategy settings from SQX"}
+        raw_xml = _read_sqx_last_settings(project, databank, strategy_name)
+    if raw_xml is None:
+        return {"ok": False, "error": "Failed to retrieve strategy settings from SQX or disk"}
 
     parsed = sqx_client.parse_backtest_settings(raw_xml)
     raw = parsed.symbol or ""
-    resolved = raw
-    if raw:
-        base = raw.split("_")[0]
-        mapping = settings.symbol_mapping_dict
-        if base in mapping:
-            resolved = mapping[base]
-        elif base.lower() in {k.lower() for k in mapping}:
-            for k, v in mapping.items():
-                if k.lower() == base.lower():
-                    resolved = v
-                    break
+    resolved = _resolve_mt5_symbol(raw)
     return {
         "ok": True, "symbol": resolved,
         "fromDate": parsed.from_date, "toDate": parsed.to_date,
@@ -851,17 +1142,7 @@ def _canonicalize_backtest_params(project: str, databank: str, strategy_name: st
         return {}
     parsed = sqx_client.parse_backtest_settings(raw_xml)
     raw = parsed.symbol or ""
-    resolved = raw
-    if raw:
-        base = raw.split("_")[0]
-        mapping = settings.symbol_mapping_dict
-        if base in mapping:
-            resolved = mapping[base]
-        elif base.lower() in {k.lower() for k in mapping}:
-            for k, v in mapping.items():
-                if k.lower() == base.lower():
-                    resolved = v
-                    break
+    resolved = _resolve_mt5_symbol(raw)
 
     result = {}
     if parsed.symbol:

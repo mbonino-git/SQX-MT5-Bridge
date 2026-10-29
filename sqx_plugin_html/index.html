@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SQX-MT5 Backtest Bridge</title>
-<script src="vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
 <style>
   :root {
     --bg-body: #ffffff;
@@ -365,7 +365,7 @@
         <div class="row">
           <div class="field">
             <label>Databank</label>
-            <select v-model="selectedDatabank" @change="onDatabankChange" :disabled="loadingDatabanks">
+            <select v-model="selectedDatabank" :disabled="loadingDatabanks">
               <option disabled value="">{{ loadingDatabanks ? 'Loading…' : 'Choose a databank' }}</option>
               <option v-for="d in databanks" :key="d.name" :value="d.name">{{ d.name }} ({{ d.records }})</option>
             </select>
@@ -474,6 +474,130 @@
         </div>
       </div>
 
+      <!-- 2b. Portfolio -->
+      <div class="card">
+        <h3>2b. Portfolio Backtest</h3>
+        <div class="row">
+          <div class="field">
+            <label>Project (same as above)</label>
+            <select v-model="portfolioProject" :disabled="loadingProjects">
+              <option disabled value="">Choose a project</option>
+              <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Databank</label>
+            <select v-model="portfolioDatabank">
+              <option disabled value="">Choose a databank</option>
+              <option v-for="d in databanks" :key="d.name" :value="d.name">{{ d.name }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Portfolio file</label>
+            <select v-model="selectedPortfolio" :disabled="loadingPortfolios">
+              <option disabled value="">{{ loadingPortfolios ? 'Loading…' : 'Choose a portfolio' }}</option>
+              <option v-for="pf in portfolios" :key="pf" :value="pf">{{ pf }}</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:flex-end;">
+            <button type="button" class="secondary" @click="loadPortfolio" :disabled="loadingPortfolioStrategies || !portfolioProject || !portfolioDatabank || !selectedPortfolio" style="white-space:nowrap;">
+              {{ loadingPortfolioStrategies ? 'Loading…' : 'Load Portfolio' }}
+            </button>
+          </div>
+        </div>
+        <div v-if="portfolioError" class="error-box">{{ portfolioError }}</div>
+        <div v-else-if="portfolioStrategies.length">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+            {{ portfolioStrategies.length }} strategies found · {{ portfolioFromLabel }}
+            <span v-if="portfolioInitialCapital"> · Initial capital: {{ portfolioInitialCapital.toLocaleString() }}</span>
+          </div>
+          <table class="compare" style="font-size:11px;margin-bottom:10px;">
+            <thead>
+              <tr><th style="text-align:left;padding-left:12px;"></th><th>Strategy</th><th>Symbol</th><th>Timeframe</th><th>Date Range</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(s, idx) in portfolioStrategies" :key="s.name">
+                <td style="text-align:center;padding-left:12px;">
+                  <input type="checkbox" :value="idx" v-model="portfolioSelectedStrategies" :disabled="s.error">
+                </td>
+                <td style="text-align:left;font-weight:600;padding-left:8px;">{{ s.name }}</td>
+                <td style="font-size:11px;">{{ s.symbol || (s.error ? s.error : '—') }}</td>
+                <td style="font-size:11px;">{{ s.timeframe || '—' }}</td>
+                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' → ' + s.to_date.replace('.', '-')) : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button @click="runPortfolioBacktest" :disabled="portfolioBacktesting || !portfolioSelectedStrategies.length">
+              {{ portfolioBacktesting ? 'Backtesting Portfolio…' : 'Backtest Selected Strategies (' + portfolioSelectedStrategies.length + ')' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Portfolio progress -->
+      <div class="card" v-if="portfolioRunning || portfolioResults.length">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h3>{{ portfolioRunning ? 'Portfolio Progress' : 'Portfolio Results' }}</h3>
+          <button v-if="portfolioRunning" class="secondary" style="padding:4px 10px;color:var(--danger);" @click="abortPortfolio" :disabled="!portfolioPortfolioKey">Abort</button>
+        </div>
+        <div v-if="portfolioRunning" style="font-size:12px;margin-bottom:4px;">
+          {{ portfolioPortfolioCompleted }} of {{ portfolioPortfolioTotal }} completed
+        </div>
+        <div v-if="portfolioRunning" class="batch-progress-bar">
+          <div class="batch-progress-fill" :style="{width: (portfolioPortfolioTotal ? (portfolioPortfolioCompleted / portfolioPortfolioTotal * 100) : 0) + '%'}"></div>
+        </div>
+        <div v-if="portfolioRunning && portfolioErrorMessage" class="error-box">{{ portfolioErrorMessage }}</div>
+        <div v-if="portfolioResults.length" style="margin-top:8px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+            {{ portfolioResults.filter(r => r.status === 'done').length }} succeeded,
+            {{ portfolioResults.filter(r => r.status === 'error').length }} failed.
+          </div>
+          <table class="compare">
+            <thead>
+              <tr><th style="text-align:left;padding-left:12px;">Strategy</th><th>Status</th><th>SQX Profit</th><th>MT5 Profit</th><th>Diff</th><th>DD %</th><th># Trades</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, idx) in portfolioResults" :key="r.strategyName" class="batch-row" :class="{'batch-row-selected': portfolioSelectedIdx === idx}" @click="selectPortfolioResult(idx)">
+                <td style="text-align:left;font-weight:600;padding-left:8px;">{{ r.strategyName }}</td>
+                <td>
+                  <span v-if="r.status === 'done'" style="color:var(--success);">✓ Done</span>
+                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">… Running</span>
+                  <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
+                  <span v-else style="color:var(--danger);" :title="r.error">✗ Error</span>
+                </td>
+                <td v-if="r.status === 'done'">{{ formatBatchVal(r.sqxStats?.NetProfit) }}</td><td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.NetProfit) }}</td><td v-else>—</td>
+                <td v-if="r.status === 'done' && r.sqxStats?.NetProfit && r.mt5Stats?.NetProfit" :class="batchDiffClass(r.sqxStats.NetProfit, r.mt5Stats.NetProfit)">{{ batchDiffPct(r.sqxStats.NetProfit, r.mt5Stats.NetProfit) }}</td><td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.PctDrawdown, true) }}</td><td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? '—' }}</td><td v-else>—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="portfolioSelectedIdx !== null && portfolioResults[portfolioSelectedIdx]?.status === 'done'" class="batch-detail">
+          <table class="compare">
+            <thead><tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr></thead>
+            <tbody>
+              <tr v-for="row in (portfolioResults[portfolioSelectedIdx]?.comparison || [])" :key="row.key">
+                <td>{{ row.label }}</td><td>{{ row.sqxDisplay }}</td><td>{{ row.mt5Display }}</td><td :class="row.diffClass">{{ row.diffDisplay }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Equity curves — same scale, directly comparable.</div>
+            <div v-if="portfolioEquityLoading[portfolioSelectedIdx]" style="font-size:12px;color:var(--text-muted);">Loading…</div>
+            <div v-else-if="portfolioEquityError(portfolioSelectedIdx)" class="error-box">{{ portfolioEquityError(portfolioSelectedIdx) }}</div>
+            <div v-else class="equity-charts">
+              <div class="equity-chart"><div class="equity-title">SQX</div><canvas :id="'port-equity-sqx-' + portfolioSelectedIdx" height="150"></div>
+              <div class="equity-chart"><div class="equity-title">MT5</div><canvas :id="'port-equity-mt5-' + portfolioSelectedIdx" height="150"></canvas>
+                <div class="equity-note">{{ portfolioEquityNote(portfolioSelectedIdx, 'mt5') }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 3. Progress -->
       <div class="card" v-if="phase !== 'idle' && !batchRunning">
         <h3>3. Progress</h3>
@@ -555,7 +679,7 @@
               <tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr>
             </thead>
             <tbody>
-              <tr v-for="row in batchResults[selectedBatchIdx].comparison" :key="row.key">
+              <tr v-for="row in (batchResults[selectedBatchIdx]?.comparison || [])" :key="row.key">
                 <td>{{ row.label }}</td>
                 <td>{{ row.sqxDisplay }}</td>
                 <td>{{ row.mt5Display }}</td>
@@ -659,8 +783,8 @@
     <div v-if="logExpanded" class="log-body">
       <div v-if="!filteredLogEntries().length" style="padding:8px 10px;color:var(--text-muted);">No entries.</div>
       <div v-for="e in filteredLogEntries()" :key="e.id" class="log-entry">
-        <span class="log-ts">{{ e.timestamp.replace('T',' ').slice(11,19) }}</span>
-        <span class="log-level" :class="e.level">{{ e.level.toUpperCase() }}</span>
+        <span class="log-ts">{{ (e.timestamp || '').replace('T',' ').slice(11,19) }}</span>
+        <span class="log-level" :class="e.level">{{ (e.level || '').toUpperCase() }}</span>
         <span class="log-cat">{{ e.category }}</span>
         <span class="log-msg">{{ e.message }}<span v-if="e.details" class="log-details"> {{ typeof e.details === 'string' ? e.details : JSON.stringify(e.details) }}</span></span>
       </div>
@@ -772,7 +896,9 @@ createApp({
       loadingProjects.value = true;
       try {
         const r = await apiGet('/projects');
-        projects.value = r.projects || [];
+        const raw = r.projects || [];
+        // SQX may return a count (purely numeric) as the first element — filter it out
+        projects.value = raw.filter(p => typeof p === 'string' && !/^\d+$/.test(p));
         if (!selectedProject.value) selectedProject.value = projects.value[0] || '';
       } catch (e) { errorMessage.value = 'Could not load projects: ' + e.message; }
       finally { loadingProjects.value = false; }
@@ -780,6 +906,7 @@ createApp({
 
     watch(selectedProject, async (newVal, oldVal) => {
       if (newVal && newVal !== oldVal) {
+        portfolioProject.value = newVal;
         databanks.value = []; selectedDatabank.value = '';
         strategies.value = []; selectedStrategyName.value = '';
         form.symbol = ''; comparison.value = []; phase.value = 'idle';
@@ -796,11 +923,14 @@ createApp({
       }
     });
 
-    async function onDatabankChange() {
-      selectedStrategyName.value = ''; strategies.value = [];
-      comparison.value = []; phase.value = 'idle'; errorMessage.value = '';
-      await loadStrategies();
-    }
+    watch(selectedDatabank, async (newVal, oldVal) => {
+      if (newVal && newVal !== oldVal) {
+        portfolioDatabank.value = newVal;
+        selectedStrategyName.value = ''; strategies.value = [];
+        comparison.value = []; phase.value = 'idle'; errorMessage.value = '';
+        await loadStrategies();
+      }
+    });
 
     async function loadStrategies() {
       if (!selectedProject.value || !selectedDatabank.value) return;
@@ -814,6 +944,268 @@ createApp({
         if (strategies.value.length) selectedStrategyName.value = strategies.value[0].name;
       } catch (e) { errorMessage.value = 'Could not load strategies: ' + e.message; }
       finally { loadingStrategies.value = false; }
+    }
+
+    // ── Portfolio ───────────────────────────────────────────────────
+    const portfolios = ref([]);
+    const loadingPortfolios = ref(false);
+    const portfolioProject = ref('');
+    const portfolioDatabank = ref('');
+    const selectedPortfolio = ref('');
+    const portfolioStrategies = ref([]);
+    const portfolioSelectedStrategies = ref([]);
+    const loadingPortfolioStrategies = ref(false);
+    const portfolioError = ref('');
+    const portfolioFromLabel = ref('');
+    const portfolioInitialCapital = ref(null);
+    const portfolioRunning = ref(false);
+    const portfolioResults = ref([]);
+    const portfolioPortfolioKey = ref('');
+    const portfolioPortfolioTotal = ref(0);
+    const portfolioPortfolioCompleted = ref(0);
+    const portfolioErrorMessage = ref('');
+    const portfolioBacktesting = ref(false);
+    const portfolioSelectedIdx = ref(null);
+    const portfolioEquityLoading = ref({});
+    const portfolioEquityErrors = ref({});
+    const _POLICY_POLL_MS = 3000;
+    let _portfolioPollTimer = null;
+
+    function _portfolioSelectedSet() {
+      return new Set(portfolioSelectedStrategies.value);
+    }
+    function _filterPortfolioStrategies() {
+      const sel = _portfolioSelectedSet();
+      return portfolioStrategies.value.filter((_, i) => sel.has(i));
+    }
+
+    async function loadPortfolios() {
+      if (!portfolioProject.value || !portfolioDatabank.value) {
+        portfolios.value = [];
+        return;
+      }
+      loadingPortfolios.value = true;
+      try {
+        const r = await apiGet(
+          '/list-portfolios?project=' + encodeURIComponent(portfolioProject.value) +
+          '&databank=' + encodeURIComponent(portfolioDatabank.value)
+        );
+        portfolios.value = r.portfolios || [];
+      } catch (e) {
+        portfolios.value = [];
+      } finally { loadingPortfolios.value = false; }
+    }
+
+    // Reset portfolio selections when project/databank changes
+    watch(portfolioProject, () => {
+      portfolioDatabank.value = '';
+      selectedPortfolio.value = '';
+      portfolioStrategies.value = [];
+      portfolioResults.value = [];
+      portfolios.value = [];
+    });
+
+    watch(portfolioDatabank, () => {
+      selectedPortfolio.value = '';
+      portfolioStrategies.value = [];
+      portfolioResults.value = [];
+      portfolios.value = [];
+      if (portfolioProject.value && portfolioDatabank.value) {
+        loadPortfolios();
+      }
+    });
+
+    async function loadPortfolio() {
+      if (!portfolioProject.value || !portfolioDatabank.value || !selectedPortfolio.value) return;
+      loadingPortfolioStrategies.value = true;
+      portfolioError.value = '';
+      portfolioStrategies.value = [];
+      portfolioSelectedStrategies.value = [];
+      try {
+        const r = await apiGet(
+          '/portfolio-strategies?project=' + encodeURIComponent(portfolioProject.value) +
+          '&databank=' + encodeURIComponent(portfolioDatabank.value) +
+          '&portfolio=' + encodeURIComponent(selectedPortfolio.value)
+        );
+        if (!r.ok) {
+          portfolioError.value = r.error || 'Failed to load portfolio';
+          return;
+        }
+        portfolioStrategies.value = r.strategies || [];
+        // Auto-select all strategies without errors
+        portfolioSelectedStrategies.value = portfolioStrategies.value
+          .map((s, i) => s.error ? -1 : i)
+          .filter(i => i >= 0);
+        if (r.fromDate && r.toDate) {
+          portfolioFromLabel.value = r.fromDate.replace('.', '-') + ' → ' + r.toDate.replace('.', '-');
+        } else {
+          portfolioFromLabel.value = '';
+        }
+        portfolioInitialCapital.value = r.initialCapital || null;
+      } catch (e) {
+        portfolioError.value = 'Could not load portfolio: ' + e.message;
+      } finally { loadingPortfolioStrategies.value = false; }
+    }
+
+    async function runPortfolioBacktest() {
+      if (!portfolioProject.value || !portfolioDatabank.value || !selectedPortfolio.value) return;
+      const selectedStrats = _filterPortfolioStrategies();
+      if (!selectedStrats.length) return;
+      portfolioBacktesting.value = true;
+      portfolioRunning.value = true;
+      portfolioResults.value = [];
+      portfolioErrorMessage.value = '';
+      portfolioSelectedIdx.value = null;
+      if (_portfolioPollTimer) { clearInterval(_portfolioPollTimer); _portfolioPollTimer = null; }
+      try {
+        const body = {
+          project: portfolioProject.value,
+          databank: portfolioDatabank.value,
+          portfolio: selectedPortfolio.value,
+          strategyIndices: selectedStrats.map(s => s.__origIdx),
+        };
+        // Map back to original indices
+        const selSet = _portfolioSelectedSet();
+        const origIndices = portfolioStrategies.value
+          .map((s, i) => selSet.has(i) ? i : null)
+          .filter(i => i !== null);
+        body.strategyIndices = origIndices;
+        const resp = await apiPost('/portfolio/backtest', body);
+        if (!resp.ok) throw new Error(resp.error || 'Failed to start portfolio backtest');
+        portfolioPortfolioKey.value = resp.portfolioKey;
+        portfolioPortfolioTotal.value = resp.jobs.length;
+        portfolioResults.value = resp.jobs.map(j => ({
+          strategyName: j.strategy,
+          status: 'pending',
+          index: j.index,
+          project: portfolioProject.value,
+          databank: 'Results',
+          deposit: form.deposit || 10000,
+          sqxStats: null, mt5Stats: null, comparison: [], error: null,
+        }));
+        // Start polling
+        _portfolioPollTimer = setInterval(async () => {
+          try {
+            const st = await apiGet('/portfolio-status?portfolio_key=' + encodeURIComponent(portfolioPortfolioKey.value));
+            if (st.ok) {
+              portfolioPortfolioCompleted.value = st.completed || 0;
+              // Update per-job status
+              for (const job of st.jobs) {
+                const existing = portfolioResults.value.find(r => r.strategyName === job.strategy);
+                if (existing) {
+                  existing.status = job.status || 'pending';
+                  if (job.project) existing.project = job.project;
+                  if (job.deposit) existing.deposit = job.deposit;
+                  if (job.result) {
+                    const comp = job.result.comparison || [];
+                    existing.sqxStats = job.result.sqxStats || {};
+                    existing.mt5Stats = job.result.mt5Stats || {};
+                    existing.comparison = comp;
+                    existing.error = null;
+                  }
+                  if (job.error) existing.error = job.error;
+                }
+              }
+              const allDone = portfolioResults.value.every(r => r.status === 'done' || r.status === 'error' || r.status === 'aborted');
+              if (allDone) {
+                clearInterval(_portfolioPollTimer);
+                _portfolioPollTimer = null;
+                portfolioRunning.value = false;
+                portfolioBacktesting.value = false;
+              }
+            }
+          } catch (e) {
+            portfolioErrorMessage.value = 'Status poll failed: ' + e.message;
+          }
+        }, _POLICY_POLL_MS);
+      } catch (e) {
+        portfolioErrorMessage.value = e.message;
+        portfolioRunning.value = false;
+        portfolioBacktesting.value = false;
+      }
+    }
+
+    function abortPortfolio() {
+      if (_portfolioPollTimer) { clearInterval(_portfolioPollTimer); _portfolioPollTimer = null; }
+      portfolioRunning.value = false;
+      portfolioBacktesting.value = false;
+    }
+
+    function selectPortfolioResult(idx) {
+      portfolioSelectedIdx.value = portfolioSelectedIdx.value === idx ? null : idx;
+      if (portfolioSelectedIdx.value === null) {
+        const canvas = document.getElementById('port-equity-sqx-' + idx);
+        if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+        const canvas2 = document.getElementById('port-equity-mt5-' + idx);
+        if (canvas2) canvas2.getContext('2d').clearRect(0, 0, canvas2.width, canvas2.height);
+        return;
+      }
+      nextTick(() => {
+        const row = portfolioResults.value[idx];
+        if (row && row.status === 'done') {
+          _loadPortfolioEquity(idx);
+        }
+      });
+    }
+
+    const portfolioEquity = ref({});
+    const portfolioEquityDrawn = {};
+
+    async function _loadPortfolioEquity(idx) {
+      const row = portfolioResults.value[idx];
+      if (!row || row.status !== 'done' || portfolioEquity.value['port-' + idx]) return;
+      portfolioEquityLoading.value = { ...portfolioEquityLoading.value, ['port-' + idx]: true };
+      try {
+        const q = '?project=' + encodeURIComponent(row.project || '')
+          + '&databank=' + encodeURIComponent(row.databank || 'Results')
+          + '&strategy_name=' + encodeURIComponent(row.strategyName)
+          + '&deposit=' + encodeURIComponent(row.deposit || form.deposit || 10000);
+        const r = await apiGet('/equity' + q);
+        portfolioEquity.value = { ...portfolioEquity.value, ['port-' + idx]: r };
+      } catch (e) {
+        portfolioEquity.value = { ...portfolioEquity.value, ['port-' + idx]: { deposit: form.deposit || 10000, sqx: null, mt5: null, error: e.message } };
+      } finally {
+        portfolioEquityLoading.value = { ...portfolioEquityLoading.value, ['port-' + idx]: false };
+        await nextTick();
+        _drawPortfolioEquity(idx);
+      }
+    }
+
+    function _drawPortfolioEquity(idx) {
+      const data = portfolioEquity.value['port-' + idx];
+      if (!data) return;
+      const deposit = data.deposit || 10000;
+      const sqxPts = (data.sqx && data.sqx.points) || [];
+      const mt5Pts = (data.mt5 && data.mt5.points) || [];
+      const values = [deposit];
+      for (const p of sqxPts) values.push(p[1]);
+      for (const p of mt5Pts) values.push(p[1]);
+      let min = Math.min(...values), max = Math.max(...values);
+      const padY = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1;
+      min -= padY; max += padY;
+      for (const [key, points] of [['sqx', sqxPts], ['mt5', mt5Pts]]) {
+        const canvas = document.getElementById('port-equity-' + key + '-' + idx);
+        if (!canvas) continue;
+        equityDrawState['port-equity-' + key + '-' + idx] = { points, min, max, deposit, which: key };
+        paintEquityCanvas(canvas);
+      }
+    }
+
+    function portfolioEquityError(idx) {
+      const d = portfolioEquity.value['port-' + idx];
+      if (!d) return null;
+      const hasAny = ['sqx', 'mt5'].some(k => d[k] && d[k].points && d[k].points.length);
+      if (hasAny) return null;
+      return 'No equity data: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' · ');
+    }
+    function portfolioEquityNote(idx, side) {
+      const d = portfolioEquity.value['port-' + idx];
+      const which = d && d[side];
+      if (!which) return 'No data';
+      if (!which.points || !which.points.length) return which.error || 'No data';
+      const pts = which.points;
+      return fmtMoney(pts[0][1]) + ' → ' + fmtMoney(pts[pts.length - 1][1])
+        + ' · ' + (pts.length - 1) + ' trades';
     }
 
     // ── Settings auto-fill ──────────────────────────────────────────
@@ -834,7 +1226,7 @@ createApp({
         const r = await apiGet(
           '/backtest-settings?project=' + encodeURIComponent(selectedProject.value) +
           '&databank=' + encodeURIComponent(selectedDatabank.value) +
-          '&strategyName=' + encodeURIComponent(selectedStrategyName.value)
+          '&strategy_name=' + encodeURIComponent(selectedStrategyName.value)
         );
         if (r.ok) {
           form.fromDate = typeof r.fromDate === 'string' ? r.fromDate.replaceAll('.', '-') : '';
@@ -1012,7 +1404,7 @@ createApp({
         const sqxStats = await apiGet(
           '/stats?project=' + encodeURIComponent(project) +
           '&databank=' + encodeURIComponent(databank) +
-          '&strategyName=' + encodeURIComponent(strategyName)
+          '&strategy_name=' + encodeURIComponent(strategyName)
         );
         buildComparison(sqxStats.stats || {}, mt5Result.stats || {});
         loadEquityFor('single', { project, databank, strategyName, deposit: form.deposit });
@@ -1035,7 +1427,7 @@ createApp({
       try {
         const q = '?project=' + encodeURIComponent(row.project || selectedProject.value || '')
           + '&databank=' + encodeURIComponent(row.databank || selectedDatabank.value || '')
-          + '&strategyName=' + encodeURIComponent(row.strategyName)
+          + '&strategy_name=' + encodeURIComponent(row.strategyName)
           + '&deposit=' + encodeURIComponent(row.deposit || form.deposit || 10000);
         const r = await apiGet('/equity' + q);
         batchEquity.value = { ...batchEquity.value, [key]: r };
@@ -1159,15 +1551,6 @@ createApp({
       ctx.fillStyle = color + '26'; ctx.fill();
     }
 
-    watch(selectedBatchIdx, (idx) => {
-      if (idx !== null && idx !== undefined) loadBatchEquity(idx);
-    });
-    async function loadBatchEquity(idx) {
-      const row = batchResults.value[idx];
-      if (!row || row.status !== 'done') return;
-      await loadEquityFor(idx, row);
-    }
-
     // ── Batch mode ──────────────────────────────────────────────────
     const batchRunning = ref(false);
     const batchResults = ref([]);
@@ -1176,6 +1559,15 @@ createApp({
     const batchErrorMessage = ref('');
     const selectedBatchIdx = ref(null);
     let batchAbort = false;
+
+    watch(selectedBatchIdx, (idx) => {
+      if (idx !== null && idx !== undefined) loadBatchEquity(idx);
+    });
+    async function loadBatchEquity(idx) {
+      const row = batchResults.value[idx];
+      if (!row || row.status !== 'done') return;
+      await loadEquityFor(idx, row);
+    }
 
     function formatBatchVal(v, isPct) {
       if (v == null || Number.isNaN(v)) return '—';
@@ -1279,7 +1671,7 @@ createApp({
         const sqxStats = await apiGet(
           '/stats?project=' + encodeURIComponent(project) +
           '&databank=' + encodeURIComponent(databank) +
-          '&strategyName=' + encodeURIComponent(strategyName)
+          '&strategy_name=' + encodeURIComponent(strategyName)
         );
 
         const comp = [
@@ -1420,6 +1812,16 @@ createApp({
       formatBatchVal, batchDiffPct, batchDiffClass, selectBatchResult,
       batchEquityLoading, batchEquityError, equityNote,
       loadBatchEquity,
+      // Portfolio
+      portfolios, loadingPortfolios, portfolioProject, portfolioDatabank,
+      selectedPortfolio, portfolioStrategies, portfolioSelectedStrategies,
+      loadingPortfolioStrategies, portfolioError, portfolioFromLabel,
+      portfolioInitialCapital, portfolioRunning, portfolioResults,
+      portfolioPortfolioKey, portfolioPortfolioTotal, portfolioPortfolioCompleted,
+      portfolioErrorMessage, portfolioBacktesting, portfolioSelectedIdx,
+      portfolioEquityLoading, portfolioEquityErrors, portfolioEquity,
+      loadPortfolios, loadPortfolio, runPortfolioBacktest, abortPortfolio,
+      selectPortfolioResult, portfolioEquityError, portfolioEquityNote,
       // Instances
       showInstances, instances, addInstance, removeInstance, saveInstances,
       refreshInstances, checkingInstances,
