@@ -920,8 +920,14 @@ createApp({
           if (selectedDatabank.value) {
             await loadStrategies();
           }
-          // Also auto-select portfolio databank
-          _selectPortfolioDatabank();
+          // Always prefer "Portfolios" databank for the portfolio section
+          const portDb = databanks.value.find(d => d.name === 'Portfolios');
+          if (portDb && portfolioDatabank.value !== 'Portfolios') {
+            portfolioDatabank.value = 'Portfolios';
+          }
+          // Load portfolio list in the same databank
+          portfolios.value = [];
+          loadPortfolios();
         } catch (e) { errorMessage.value = 'Could not load databanks: ' + e.message; }
         finally { loadingDatabanks.value = false; }
       }
@@ -1779,33 +1785,24 @@ createApp({
       }
     }
 
-    // Auto-select databank with portfolio .sqx files for portfolio section
-    function _selectPortfolioDatabank() {
-      if (!portfolioProject.value || !databanks.value.length) return;
-      // Prefer "Portfolios" databank if it exists
-      let candidate = databanks.value.find(d => d.name === 'Portfolios');
-      if (!candidate) {
-        // Fall back to any databank with records > 0
-        candidate = databanks.value.find(d => d.records && d.records > 0);
-      }
-      if (candidate && candidate.name !== portfolioDatabank.value) {
-        portfolioDatabank.value = candidate.name;
-        loadPortfolios();
-      }
-    }
-
     // ── Mount ───────────────────────────────────────────────────────
     onMounted(async () => {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
       window.addEventListener('message', handleMessage);
       checkBridge();
-      // Load portfolio list after initial project/databank are set
-      await new Promise(r => setTimeout(r, 1000));
-      if (portfolioProject.value && portfolioDatabank.value) {
+      // Wait for bridge online, then check if we need to initialize portfolio section
+      while (bridgeStatus.value !== 'online') {
+        await new Promise(r => setTimeout(r, 200));
+      }
+      await new Promise(r => setTimeout(r, 300));
+      if (portfolioProject.value && databanks.value.length && !portfolios.value.length) {
+        const portDb = databanks.value.find(d => d.name === 'Portfolios');
+        const targetDb = portDb || databanks.value.find(d => d.records && d.records > 0);
+        if (targetDb && portfolioDatabank.value !== targetDb.name) {
+          portfolioDatabank.value = targetDb.name;
+        }
         loadPortfolios();
-      } else {
-        _selectPortfolioDatabank();
       }
     });
 
