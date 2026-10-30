@@ -1040,6 +1040,354 @@ def get_equity(
     }
 
 
+# ── Results (unified single + portfolio) ─────────────────────────────
+
+STATS_LABELS = {
+    "NetProfit": "Net Profit",
+    "NumberOfTrades": "# of Trades",
+    "ProfitFactor": "Profit Factor",
+    "PctDrawdown": "Max Drawdown (equity, %)",
+    "WinningPct": "% Winning Trades",
+    "AvgLoss": "Average Risk (avg loss)",
+    "MaxConsecWins": "Max Consecutive Wins",
+    "MaxConsecLoss": "Max Consecutive Losses",
+}
+
+
+def _normalize_stat_value(key, value):
+    if key == "AvgLoss" and isinstance(value, (int, float)) and value > 0:
+        return -value
+    return value
+
+
+def _build_comparison(sqx_stats, mt5_stats):
+    comparison = []
+    for key in ["NetProfit", "NumberOfTrades", "ProfitFactor", "PctDrawdown",
+                 "WinningPct", "AvgLoss", "MaxConsecWins", "MaxConsecLoss"]:
+        label = STATS_LABELS.get(key, key)
+        sqx_val = _normalize_stat_value(key, sqx_stats.get(key))
+        mt5_val = _normalize_stat_value(key, mt5_stats.get(key))
+        fmt = lambda v: ('—' if v is None or (isinstance(v, float) and (v != v or abs(v) == float('inf')))
+                          else (f"{v:.2f}%" if key == "PctDrawdown" or key == "WinningPct"
+                                else f"{v:,}" if isinstance(v, (int, float)) else str(v)))
+
+        diff_display = "—"
+        diff_class = ""
+        if sqx_val is not None and mt5_val is not None and sqx_val != 0:
+            pct = abs((mt5_val - sqx_val) / sqx_val) * 100
+            sign = "+" if mt5_val >= sqx_val else ""
+            diff_display = f"{sign}{((mt5_val - sqx_val) / abs(sqx_val) * 100):.1f}%"
+            diff_class = "diff-bad" if pct > 15 else "diff-warn" if pct > 5 else "diff-ok"
+
+        comparison.append({
+            "key": key,
+            "label": label,
+            "sqxDisplay": fmt(sqx_val),
+            "mt5Display": fmt(mt5_val),
+            "diffDisplay": diff_display,
+            "diffClass": diff_class,
+        })
+    return comparison
+
+
+def _merge_equity_curves(equity_map, mode="single"):
+    """Merge multiple equity curves into a single combined curve.
+
+    equity_map: { "sqx": { "points": [[i, val], ...], ... }, "mt5": { ... } }
+    mode: "single" or "portfolio"
+    """
+    merged = {"sqx": {"points": []}, "mt5": {"points": []}}
+
+    for side in ["sqx", "mt5"]:
+        all_curves = list(equity_map.get(side, {}).values())
+        if not all_curves:
+            merged[side]["points"] = []
+            continue
+
+        max_len = max(len(c) for c in all_curves)
+        if max_len == 0:
+            merged[side]["points"] = []
+            continue
+
+        # Pad shorter curves with last value
+        padded = []
+        for c in all_curves:
+            padded.append(c + [c[-1]] * (max_len - len(c)))
+
+        # Sum at each index
+        combined = []
+        for i in range(max_len):
+            total = sum(p[i] for p in padded)
+            combined.append([i, round(total, 2)])
+
+        merged[side]["points"] = combined
+
+    return merged
+
+
+@app.get("/results")
+def get_results(
+    strategy_name: str = Query(None, description="Single strategy name"),
+    project: str = Query(None, description="Project name"),
+    databank: str = Query(None, description="Databank name"),
+    portfolio_key: str = Query(None, description="Portfolio backtest key"),
+):
+    """Unified results endpoint for single strategy and portfolio backtests.
+
+    Single mode: GET /results?strategy_name=FOO&project=BAR&databank=Results
+    Portfolio mode: GET /results?portfolio_key=KEY
+    """
+    # ── Single strategy mode ────────────────────────────────────────
+    if strategy_name:
+        if not project or not databank:
+            return {"ok": False, "error": "project and databank required for single mode"}
+
+        # SQX stats
+        sqx_resp = get_stats(project=project, databank=databank, strategy_name=strategy_name)
+        sqx_stats = (sqx_resp or {}).get("stats", {})
+
+        # MT5 stats — fetch from the most recent completed job in DB
+        mt5_stats = {}
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT result FROM jobs "
+            "WHERE strategy_name = ? AND status = 'done' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (strategy_name,),
+        ).fetchall()
+        conn.close()
+        if rows:
+            try:
+                result = json.loads(rows[0][0])
+                mt5_stats = result.get("stats", result.get("mt5_stats", {}))
+            except Exception:
+                pass
+
+        # Equity curves
+        deposit = 10000
+        eq_resp = get_equity(project=project, databank=databank,
+                             strategy_name=strategy_name, deposit=str(deposit))
+        sqx_equity = eq_resp.get("sqx", {})
+        mt5_equity = eq_resp.get("mt5", {})
+
+        return {
+            "ok": True,
+            "mode": "single",
+            "aggregate": {
+                "stats": sqx_stats | mt5_stats,
+                "comparison": _build_comparison(sqx_stats, mt5_stats),
+                "completed": 1,
+                "total": 1,
+            },
+            "equity": {
+                "sqx": sqx_equity,
+                "mt5": mt5_equity,
+            },
+        }
+
+    # ── Portfolio mode ──────────────────────────────────────────────
+    if not portfolio_key:
+        return {"ok": False, "error": "Either strategy_name or portfolio_key is required"}
+
+    job_info = _portfolio_backtest_jobs.get(portfolio_key)
+    if not job_info:
+        return {"ok": False, "error": "Portfolio backtest not found"}
+
+    # Reload from DB to get latest results
+    conn = _get_db()
+    for j in job_info["jobs"]:
+        if j.get("jobId"):
+            status_row = conn.execute(
+                "SELECT status, result, error FROM jobs WHERE id = ?", (j["jobId"],)
+            ).fetchone()
+            if status_row:
+                j["status"] = status_row[0]
+                if status_row[1]:
+                    try:
+                        j["result"] = json.loads(status_row[1])
+                    except Exception:
+                        pass
+    conn.close()
+
+    # Collect completed strategies
+    completed_jobs = [j for j in job_info["jobs"] if j.get("status") == "done"]
+    total = len(job_info["jobs"])
+
+    if not completed_jobs:
+        return {
+            "ok": True,
+            "mode": "portfolio",
+            "aggregate": {
+                "stats": {},
+                "comparison": _build_comparison({}, {}),
+                "completed": 0,
+                "total": total,
+            },
+            "equity": {"sqx": {}, "mt5": {}},
+        }
+
+    # Aggregate metrics
+    agg_net_profit = 0
+    agg_num_trades = 0
+    agg_gross_profit = 0
+    agg_gross_loss = 0
+    agg_winning_trades = 0
+    agg_avg_loss_sum = 0
+    agg_avg_loss_count = 0
+    agg_max_dd = 0
+    agg_max_consec_wins = 0
+    agg_max_consec_loss = 0
+
+    sqx_stats_all = []
+    mt5_stats_all = []
+    sqx_equity_map = {}
+    mt5_equity_map = {}
+
+    for job in completed_jobs:
+        jresult = job.get("result", {})
+        mt5_stats = jresult.get("stats", jresult.get("mt5_stats", {}))
+        strategy_name_local = jresult.get("strategy", job.get("strategy", ""))
+        proj = job.get("project", project if (project := job_info.get("project")) else "")
+        db = job.get("databank", "Results")
+
+        # Fetch SQX stats for this strategy
+        sqx_resp = get_stats(project=proj, databank=db, strategy_name=strategy_name_local)
+        sqx_stats = (sqx_resp or {}).get("stats", {})
+        if sqx_stats:
+            sqx_stats_all.append(sqx_stats)
+            mt5_stats_all.append(mt5_stats)
+
+        # Aggregate NetProfit
+        np = mt5_stats.get("NetProfit", 0) or 0
+        agg_net_profit += np
+
+        # Aggregate trades
+        nt = mt5_stats.get("NumberOfTrades", 0) or 0
+        agg_num_trades += nt
+
+        # Approximate gross profit/loss from NetProfit and ProfitFactor
+        pf = mt5_stats.get("ProfitFactor")
+        if pf and pf != 0:
+            try:
+                pf_val = float(pf)
+                if abs(pf_val) > 0.01:
+                    # NetProfit = GrossProfit + GrossLoss (loss is negative)
+                    # PF = GrossProfit / abs(GrossLoss)
+                    # NP = GP + GL => GL = NP - GP
+                    # PF = GP / abs(NP - GP)
+                    # Solving: GP = NP * PF / (PF - 1) when PF > 1
+                    # Or: if PF < 1, GL = NP * PF / (1 - PF)
+                    if pf_val > 1:
+                        gp = np * pf_val / (pf_val - 1) if np != 0 else np
+                        gl = np - gp
+                    else:
+                        gp = np * pf_val / (1 - pf_val) if np != 0 else np
+                        gl = np - gp
+                    agg_gross_profit += max(gp, 0)
+                    agg_gross_loss += min(gl, 0)
+            except Exception:
+                pass
+
+        # Winning pct
+        wp = mt5_stats.get("WinningPct")
+        if wp is not None and nt > 0:
+            try:
+                agg_winning_trades += int(nt * float(wp) / 100)
+            except Exception:
+                pass
+
+        # AvgLoss
+        al = mt5_stats.get("AvgLoss")
+        if al is not None and nt > 0:
+            try:
+                agg_avg_loss_sum += abs(float(al))
+                agg_avg_loss_count += 1
+            except Exception:
+                pass
+
+        # Drawdown (max)
+        dd = mt5_stats.get("PctDrawdown")
+        if dd is not None:
+            try:
+                agg_max_dd = max(agg_max_dd, abs(float(dd)))
+            except Exception:
+                pass
+
+        # Max consec
+        mcw = mt5_stats.get("MaxConsecWins")
+        if mcw is not None:
+            try:
+                agg_max_consec_wins = max(agg_max_consec_wins, int(mcw))
+            except Exception:
+                pass
+        mcl = mt5_stats.get("MaxConsecLoss")
+        if mcl is not None:
+            try:
+                agg_max_consec_loss = max(agg_max_consec_loss, abs(int(mcl)))
+            except Exception:
+                pass
+
+        # Equity curves
+        sqx_eq = None
+        mt5_eq = None
+        if sqx_stats:
+            eq_resp = get_equity(project=proj, databank=db,
+                                 strategy_name=strategy_name_local, deposit=str(job.get("deposit", 10000)))
+            sqx_eq = eq_resp.get("sqx", {}).get("points", [])
+            mt5_eq = eq_resp.get("mt5", {}).get("points", [])
+        mt5_eq_raw = jresult.get("mt5_equity", {})
+        if mt5_eq_raw and isinstance(mt5_eq_raw, dict):
+            curve_pts = mt5_eq_raw.get("curve", [])
+            if curve_pts:
+                mt5_eq = [[p.get("index", i), p.get("equity", 0)] for i, p in enumerate(curve_pts)]
+        if sqx_eq:
+            sqx_equity_map[strategy_name_local] = sqx_eq
+        if mt5_eq:
+            mt5_equity_map[strategy_name_local] = mt5_eq
+
+    # Build aggregate stats
+    agg_pf = (agg_gross_profit / abs(agg_gross_loss)) if agg_gross_loss != 0 else (
+        agg_gross_profit if agg_gross_profit > 0 else 0
+    )
+    agg_winning_pct = (agg_winning_trades / agg_num_trades * 100) if agg_num_trades > 0 else 0
+    agg_avg_loss = (agg_avg_loss_sum / agg_avg_loss_count) if agg_avg_loss_count > 0 else 0
+
+    agg_stats = {
+        "NetProfit": round(agg_net_profit, 2),
+        "NumberOfTrades": agg_num_trades,
+        "ProfitFactor": round(agg_pf, 2) if agg_pf != 0 else None,
+        "PctDrawdown": round(agg_max_dd, 2) if agg_max_dd > 0 else None,
+        "WinningPct": round(agg_winning_pct, 2) if agg_winning_pct > 0 else None,
+        "AvgLoss": round(agg_avg_loss, 2) if agg_avg_loss > 0 else None,
+        "MaxConsecWins": agg_max_consec_wins,
+        "MaxConsecLoss": agg_max_consec_loss,
+    }
+
+    # Build comparison
+    comparison = _build_comparison(
+        sqx_stats_all[0] if sqx_stats_all else {},
+        mt5_stats_all[0] if mt5_stats_all else {},
+    ) if sqx_stats_all and mt5_stats_all else _build_comparison(agg_stats, agg_stats)
+
+    # Merge equity curves
+    merged_equity = _merge_equity_curves(
+        {"sqx": sqx_equity_map, "mt5": mt5_equity_map},
+        mode="portfolio",
+    )
+
+    return {
+        "ok": True,
+        "mode": "portfolio",
+        "aggregate": {
+            "stats": agg_stats,
+            "comparison": comparison,
+            "completed": len(completed_jobs),
+            "total": total,
+        },
+        "equity": merged_equity,
+    }
+
+
 # ── Settings ────────────────────────────────────────────────────────
 
 _SETTINGS_FILE = Path(__file__).resolve().parent.parent / "bridge_settings.json"
