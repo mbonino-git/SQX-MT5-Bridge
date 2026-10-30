@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="light">
 
 <head>
@@ -76,6 +76,54 @@
     border-radius: 6px;
     padding: 12px;
     margin-bottom: 12px;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    padding: 0 0 8px 0;
+  }
+  .card-header h3 {
+    margin: 0;
+    font-size: 14px;
+    flex: 1;
+  }
+  .card-toggle {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-surface-2);
+    color: var(--text-main);
+    font-size: 11px;
+    cursor: pointer;
+    transition: transform 0.15s ease, background 0.15s ease;
+    flex-shrink: 0;
+    margin-left: 8px;
+    line-height: 1;
+  }
+  .card-toggle:hover {
+    background: var(--primary);
+    color: #fff;
+  }
+  .card-toggle.collapsed {
+    transform: rotate(-90deg);
+  }
+  .card-body {
+    transition: max-height 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
+    overflow: hidden;
+  }
+  .card-body.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
+    padding: 0;
+    margin: 0;
   }
 
   .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -288,8 +336,8 @@
   <div style="display:flex;align-items:center;justify-content:space-between;">
     <h2>SQX-MT5 Backtest Bridge</h2>
     <div style="display:flex;gap:8px;align-items:center;">
-      <button class="secondary" style="padding:4px 10px;" @click="toggleInstances" title="Configure MT5 instances">âš™ Instances</button>
-      <button class="secondary" style="padding:4px 10px;" @click="toggleSettings" title="Bridge settings">âš™ Settings</button>
+      <button class="secondary" style="padding:4px 10px;" @click="toggleInstances" title="Configure MT5 instances">⚙ Instances</button>
+      <button class="secondary" style="padding:4px 10px;" @click="toggleSettings" title="Bridge settings">⚙ Settings</button>
     </div>
   </div>
 
@@ -323,7 +371,7 @@
     <div style="display:flex;gap:8px;margin-top:8px;">
       <button class="secondary btn-sm" @click="addInstance">+ Add instance</button>
       <button class="secondary btn-sm" @click="refreshInstances" :disabled="checkingInstances">
-        {{ checkingInstances ? 'Checkingâ€¦' : 'Check status' }}
+        {{ checkingInstances ? 'Checking…' : 'Check status' }}
       </button>
     </div>
   </div>
@@ -346,13 +394,13 @@
       </div>
     </div>
     <div class="row">
-      <button @click="saveSettings" :disabled="savingSettings">{{ savingSettings ? 'Savingâ€¦' : 'Save' }}</button>
+      <button @click="saveSettings" :disabled="savingSettings">{{ savingSettings ? 'Saving…' : 'Save' }}</button>
     </div>
     <div v-if="settingsMessage" style="font-size:12px;color:var(--success);">{{ settingsMessage }}</div>
   </div>
 
   <div v-if="bridgeStatus !== 'online'" class="banner offline">
-    <div v-if="bridgeStatus === 'checking'">Connecting to SQX-MT5 Bridgeâ€¦</div>
+    <div v-if="bridgeStatus === 'checking'">Connecting to SQX-MT5 Bridge…</div>
     <div v-else>
       Could not connect to the bridge at <code>{{ bridgeUrl }}</code>.
       Make sure the service is running and press retry.
@@ -365,12 +413,16 @@
 
       <!-- 1. Strategy -->
       <div class="card">
-        <h3>1. Strategy</h3>
+        <div class="card-header" @click="toggleSection('strategy')">
+          <h3>1. Strategy</h3>
+          <span class="card-toggle" :class="{ collapsed: !sectionCollapse.strategy }">▼</span>
+        </div>
+        <div class="card-body" :class="{ collapsed: sectionCollapse.strategy }">
         <div class="row">
           <div class="field">
             <label>Custom project</label>
             <select v-model="selectedProject" :disabled="loadingProjects">
-              <option disabled value="">{{ loadingProjects ? 'Loadingâ€¦' : 'Choose a project' }}</option>
+              <option disabled value="">{{ loadingProjects ? 'Loading…' : 'Choose a project' }}</option>
               <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
             </select>
           </div>
@@ -379,23 +431,28 @@
           <div class="field">
             <label>Databank</label>
             <select v-model="selectedDatabank" :disabled="loadingDatabanks">
-              <option disabled value="">{{ loadingDatabanks ? 'Loadingâ€¦' : 'Choose a databank' }}</option>
+              <option disabled value="">{{ loadingDatabanks ? 'Loading…' : 'Choose a databank' }}</option>
               <option v-for="d in databanks" :key="d.name" :value="d.name">{{ d.name }} ({{ d.records }})</option>
             </select>
           </div>
           <div class="field">
             <label>Saved strategy</label>
             <select v-model="selectedStrategyName" :disabled="loadingStrategies || !strategies.length">
-              <option disabled value="">{{ loadingStrategies ? 'Loadingâ€¦' : (strategies.length ? 'Choose a strategy' : 'This databank is empty') }}</option>
+              <option disabled value="">{{ loadingStrategies ? 'Loading…' : (strategies.length ? 'Choose a strategy' : 'This databank is empty') }}</option>
               <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
             </select>
           </div>
+        </div>
         </div>
       </div>
 
       <!-- 2A. Single Backtest -->
       <div class="card" v-if="selectedStrategyName">
-        <h3>2A. Single Backtest</h3>
+        <div class="card-header" @click="toggleSection('singleBacktest')">
+          <h3>2A. Single Backtest</h3>
+          <span class="card-toggle" :class="{ collapsed: !sectionCollapse.singleBacktest }">▼</span>
+        </div>
+        <div class="card-body" :class="{ collapsed: sectionCollapse.singleBacktest }">
         <div class="row">
           <div class="field">
             <label>Symbol (historical data available in your MT5)</label>
@@ -407,7 +464,7 @@
               <input v-else type="text" v-model="form.symbol" placeholder="EURUSD" style="flex:1;">
               <button type="button" class="secondary" @click="refreshSymbols" :disabled="refreshingSymbols"
                       style="white-space:nowrap;" title="Load symbol list from MT5 broker">
-                {{ refreshingSymbols ? 'Connectingâ€¦' : 'Refresh symbols' }}
+                {{ refreshingSymbols ? 'Connecting…' : 'Refresh symbols' }}
               </button>
             </div>
             <span v-if="mt5Symbols.length" style="font-size:10px;color:var(--text-muted);">
@@ -449,7 +506,7 @@
         <div class="row">
           <div class="field">
             <label>Initial deposit (same as in SQX)</label>
-            <div class="settings-box">{{ loadingBacktestSettings ? 'Loadingâ€¦' : (form.deposit ? form.deposit.toLocaleString() : 'â€”') }}</div>
+            <div class="settings-box">{{ loadingBacktestSettings ? 'Loading…' : (form.deposit ? form.deposit.toLocaleString() : '—') }}</div>
           </div>
           <div class="field">
             <label>Currency</label>
@@ -463,17 +520,22 @@
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button @click="runBacktest" :disabled="running || batchRunning || portfolioBacktesting || loadingBacktestSettings || (!mt5Symbols.length && !form.symbol) || !form.fromDate || !form.toDate">
-            {{ running ? 'Runningâ€¦' : 'Run in MT5' }}
+            {{ running ? 'Running…' : 'Run in MT5' }}
           </button>
           <button class="secondary" @click="runBatch" :disabled="running || batchRunning || portfolioBacktesting || loadingBacktestSettings || (!mt5Symbols.length && !strategies.length) || !form.symbol">
-            {{ batchRunning ? 'Running batchâ€¦' : 'Run all strategies' }}
+            {{ batchRunning ? 'Running batch…' : 'Run all strategies' }}
           </button>
+        </div>
         </div>
       </div>
 
       <!-- 2b. Portfolio -->
       <div class="card">
-        <h3>2b. Portfolio Backtest</h3>
+        <div class="card-header" @click="toggleSection('portfolio')">
+          <h3>2b. Portfolio Backtest</h3>
+          <span class="card-toggle" :class="{ collapsed: !sectionCollapse.portfolio }">▼</span>
+        </div>
+        <div class="card-body" :class="{ collapsed: sectionCollapse.portfolio }">
         <div class="row">
           <div class="field">
             <label>Project</label>
@@ -492,13 +554,13 @@
           <div class="field">
             <label>Portfolio file</label>
             <select v-model="selectedPortfolio" :disabled="loadingPortfolios">
-              <option disabled value="">{{ loadingPortfolios ? 'Loadingâ€¦' : 'Choose a portfolio' }}</option>
+              <option disabled value="">{{ loadingPortfolios ? 'Loading…' : 'Choose a portfolio' }}</option>
               <option v-for="pf in portfolios" :key="pf" :value="pf">{{ pf }}</option>
             </select>
           </div>
           <div style="display:flex;align-items:flex-end;">
             <button type="button" class="secondary" @click="loadPortfolio" :disabled="loadingPortfolioStrategies || !portfolioProject || !portfolioDatabank || !selectedPortfolio" style="white-space:nowrap;">
-              {{ loadingPortfolioStrategies ? 'Loadingâ€¦' : 'Load Portfolio' }}
+              {{ loadingPortfolioStrategies ? 'Loading…' : 'Load Portfolio' }}
             </button>
           </div>
         </div>
@@ -532,7 +594,7 @@
             <div class="row">
               <div class="field">
                 <label>Initial deposit (same as in SQX)</label>
-                <div class="settings-box">{{ portfolioInitialCapital ? portfolioInitialCapital.toLocaleString() : 'â€”' }}</div>
+                <div class="settings-box">{{ portfolioInitialCapital ? portfolioInitialCapital.toLocaleString() : '—' }}</div>
               </div>
               <div class="field">
                 <label>Currency</label>
@@ -558,23 +620,28 @@
                   <input type="checkbox" :value="idx" v-model="portfolioSelectedStrategies" :disabled="s.error">
                 </td>
                 <td style="text-align:left;font-weight:600;padding-left:8px;">{{ s.name }}</td>
-                <td style="font-size:11px;">{{ s.symbol || (s.error ? s.error : 'â€”') }}</td>
-                <td style="font-size:11px;">{{ s.timeframe || 'â€”' }}</td>
-                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' â†’ ' + s.to_date.replace('.', '-')) : 'â€”' }}</td>
+                <td style="font-size:11px;">{{ s.symbol || (s.error ? s.error : '—') }}</td>
+                <td style="font-size:11px;">{{ s.timeframe || '—' }}</td>
+                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' →’ ' + s.to_date.replace('.', '-')) : '—' }}</td>
               </tr>
             </tbody>
           </table>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button @click="runPortfolioBacktest" :disabled="portfolioBacktesting || running || batchRunning || !portfolioSelectedStrategies.length">
-              {{ portfolioBacktesting ? 'Backtesting Portfolioâ€¦' : 'Backtest Selected Strategies (' + portfolioSelectedStrategies.length + ')' }}
+              {{ portfolioBacktesting ? 'Backtesting Portfolio…' : 'Backtest Selected Strategies (' + portfolioSelectedStrategies.length + ')' }}
             </button>
           </div>
+        </div>
         </div>
       </div>
 
       <!-- 3. Progress -->
       <div class="card" v-if="phase !== 'idle' && !batchRunning">
-        <h3>3. Progress</h3>
+        <div class="card-header" @click="toggleSection('progress')">
+          <h3>3. Progress</h3>
+          <span class="card-toggle" :class="{ collapsed: !sectionCollapse.progress }">▼</span>
+        </div>
+        <div class="card-body" :class="{ collapsed: sectionCollapse.progress }">
         <ul class="steps">
           <li :class="stepClass('export')"><span class="icon">{{ stepIcon('export') }}</span> Exporting MQ5 code from SQX</li>
           <li :class="stepClass('compile')"><span class="icon">{{ stepIcon('compile') }}</span> {{ compileCached ? 'Already compiled' : 'Compiling in MetaEditor' }}</li>
@@ -582,14 +649,19 @@
           <li :class="stepClass('compare')"><span class="icon">{{ stepIcon('compare') }}</span> Comparing results</li>
         </ul>
         <div v-if="errorMessage" class="error-box">{{ errorMessage }}</div>
+        </div>
       </div>
 
       <!-- 4. Batch progress -->
       <div class="card" v-if="batchRunning || batchResults.length">
-        <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="card-header" @click="toggleSection('batch')">
           <h3>{{ batchRunning ? 'Batch Progress' : 'Batch Results' }}</h3>
-          <button v-if="batchRunning" class="secondary" style="padding:4px 10px;color:var(--danger);" @click="abortBatch">Abort</button>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button v-if="batchRunning" class="secondary" style="padding:4px 10px;color:var(--danger);" @click.stop="abortBatch">Abort</button>
+            <span class="card-toggle" :class="{ collapsed: !sectionCollapse.batch }">▼</span>
+          </div>
         </div>
+        <div class="card-body" :class="{ collapsed: sectionCollapse.batch }">
         <div v-if="batchRunning" style="font-size:12px;margin-bottom:4px;">
           {{ batchCompletedCount }} of {{ batchTotal }} completed, {{ batchTotal - batchCompletedCount }} remaining
         </div>
@@ -622,26 +694,26 @@
                   :class="{'batch-row-selected': selectedBatchIdx === idx}"
                   @click="selectBatchResult(idx)">
                 <td style="text-align:left;font-weight:600;">{{ r.strategyName }}</td>
-                <td style="font-size:11px;color:var(--text-muted);">{{ r.instance || 'â€”' }}</td>
+                <td style="font-size:11px;color:var(--text-muted);">{{ r.instance || '—' }}</td>
                 <td v-if="r.status === 'done'">{{ formatBatchVal(r.sqxStats?.NetProfit) }}</td>
-                <td v-else>â€”</td>
+                <td v-else>—</td>
                 <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.NetProfit) }}</td>
-                <td v-else>â€”</td>
+                <td v-else>—</td>
                 <td v-if="r.status === 'done' && r.sqxStats?.NetProfit && r.mt5Stats?.NetProfit"
                     :class="batchDiffClass(r.sqxStats.NetProfit, r.mt5Stats.NetProfit)">
                   {{ batchDiffPct(r.sqxStats.NetProfit, r.mt5Stats.NetProfit) }}
                 </td>
-                <td v-else-if="r.status === 'done'">â€”</td>
-                <td v-else>â€”</td>
+                <td v-else-if="r.status === 'done'">—</td>
+                <td v-else>—</td>
                 <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.PctDrawdown, true) }}</td>
-                <td v-else>â€”</td>
-                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? 'â€”' }}</td>
-                <td v-else>â€”</td>
+                <td v-else>—</td>
+                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? '—' }}</td>
+                <td v-else>—</td>
                 <td>
-                  <span v-if="r.status === 'done'" style="color:var(--success);">âœ“ Done</span>
-                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">â€¦ Running</span>
+                  <span v-if="r.status === 'done'" style="color:var(--success);">✓“ Done</span>
+                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">… Running</span>
                   <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
-                  <span v-else style="color:var(--danger);" :title="r.error">âœ— Error</span>
+                  <span v-else style="color:var(--danger);" :title="r.error">✓— Error</span>
                 </td>
               </tr>
             </tbody>
@@ -663,9 +735,9 @@
           </table>
           <div style="margin-top:12px;">
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
-              Equity curves â€” same scale, directly comparable.
+              Equity curves — same scale, directly comparable.
             </div>
-            <div v-if="batchEquityLoading[selectedBatchIdx]" style="font-size:12px;color:var(--text-muted);">Loadingâ€¦</div>
+            <div v-if="batchEquityLoading[selectedBatchIdx]" style="font-size:12px;color:var(--text-muted);">Loading…</div>
             <div v-else-if="batchEquityError(selectedBatchIdx)" class="error-box">{{ batchEquityError(selectedBatchIdx) }}</div>
             <div v-else class="equity-charts">
               <div class="equity-chart">
@@ -681,11 +753,16 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
 
       <!-- Unified Results Section -->
       <div class="card" v-if="comparison.length || (portfolioResults.length && portfolioRunning) || (resultsAggregate && resultsAggregate.aggregate)">
-        <h3>Results</h3>
+        <div class="card-header" @click="toggleSection('results')">
+          <h3>Results</h3>
+          <span class="card-toggle" :class="{ collapsed: !sectionCollapse.results }">▼</span>
+        </div>
+        <div class="card-body" :class="{ collapsed: sectionCollapse.results }">
 
         <!-- Results Table - Single Strategy Mode -->
         <div v-if="comparison.length">
@@ -811,6 +888,7 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
     </div>
   </template>
@@ -859,7 +937,7 @@
 <script>
 const { createApp, ref, reactive, onMounted, computed, watch, nextTick } = Vue;
 
-// â”€â”€ Bridge URL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// —€—€ Bridge URL —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
 const BRIDGE_URL = 'http://localhost:8090';
 
 const STATS_LABELS = {
@@ -878,7 +956,7 @@ createApp({
     const bridgeStatus = ref('checking');
     const bridgeUrl = ref(BRIDGE_URL);
 
-    // â”€â”€ Activity Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Activity Log —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const LOG_MAX = 500;
     const logEntries = ref([]);
     const logFilter = ref('all');
@@ -913,7 +991,7 @@ createApp({
     }
     function logTimeSince(startMs) { return ((Date.now() - startMs) / 1000).toFixed(1) + 's'; }
 
-    // â”€â”€ Strategy cascade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Strategy cascade —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const projects = ref([]);
     const loadingProjects = ref(false);
     const selectedProject = ref('');
@@ -930,7 +1008,7 @@ createApp({
       const res = await fetch(BRIDGE_URL + path);
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      logInfo('api', 'GET ' + path + ' â†’ OK (' + logTimeSince(startMs) + ')');
+      logInfo('api', 'GET ' + path + ' →’ OK (' + logTimeSince(startMs) + ')');
       return body;
     }
     async function apiPost(path, payload) {
@@ -942,7 +1020,7 @@ createApp({
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      logInfo('api', 'POST ' + path + ' â†’ OK (' + logTimeSince(startMs) + ')');
+      logInfo('api', 'POST ' + path + ' →’ OK (' + logTimeSince(startMs) + ')');
       return body;
     }
 
@@ -951,7 +1029,7 @@ createApp({
       try {
         const r = await apiGet('/projects');
         const raw = r.projects || [];
-        // SQX may return a count (purely numeric) as the first element â€” filter it out
+        // SQX may return a count (purely numeric) as the first element — filter it out
         projects.value = raw.filter(p => typeof p === 'string' && !/^\d+$/.test(p));
         if (!selectedProject.value) selectedProject.value = projects.value[0] || '';
       } catch (e) { errorMessage.value = 'Could not load projects: ' + e.message; }
@@ -1014,7 +1092,7 @@ createApp({
       finally { loadingStrategies.value = false; }
     }
 
-    // â”€â”€ Portfolio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Portfolio —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const portfolios = ref([]);
     const loadingPortfolios = ref(false);
     const portfolioProject = ref('');
@@ -1036,9 +1114,22 @@ createApp({
     const portfolioSelectedIdx = ref(null);
     const portfolioEquityLoading = ref({});
     const portfolioEquityErrors = ref({});
-    // â”€â”€ Unified Results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Unified Results —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const resultsAggregate = ref(null);
     const resultsAggregateLoading = ref(false);
+    // —€—€ Collapsible Sections —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
+    const sectionCollapse = reactive({
+      strategy: false,
+      singleBacktest: false,
+      portfolio: false,
+      progress: false,
+      batch: false,
+      results: false,
+      log: false,
+    });
+    function toggleSection(key) {
+      sectionCollapse[key] = !sectionCollapse[key];
+    }
     const _POLICY_POLL_MS = 30000;
     let _portfolioPollTimer = null;
 
@@ -1341,11 +1432,11 @@ createApp({
       if (!which) return 'No data';
       if (!which.points || !which.points.length) return which.error || 'No data';
       const pts = which.points;
-      return fmtMoney(pts[0][1]) + ' â†’ ' + fmtMoney(pts[pts.length - 1][1])
+      return fmtMoney(pts[0][1]) + ' →’ ' + fmtMoney(pts[pts.length - 1][1])
         + ' Â· ' + (pts.length - 1) + ' trades';
     }
 
-    // â”€â”€ Settings auto-fill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Settings auto-fill —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const loadingBacktestSettings = ref(false);
     const backtestSettingsError = ref('');
     const form = reactive({
@@ -1395,7 +1486,7 @@ createApp({
       if (newVal !== oldVal) loadBacktestSettings();
     }, { immediate: true });
 
-    // â”€â”€ Symbols â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Symbols —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const mt5Symbols = ref([]);
     const refreshingSymbols = ref(false);
     const periods = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1', 'MN1'];
@@ -1431,7 +1522,7 @@ createApp({
       }
     }
 
-    // â”€â”€ Bridge check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Bridge check —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     async function checkBridge() {
       bridgeStatus.value = 'checking';
       try {
@@ -1446,7 +1537,7 @@ createApp({
       }
     }
 
-    // â”€â”€ Theme sync via postMessage (from SQX) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Theme sync via postMessage (from SQX) —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     function handleMessage(e) {
       const { type, theme } = e.data || {};
       if (type === 'SET_THEME') {
@@ -1461,7 +1552,7 @@ createApp({
       }
     }
 
-    // â”€â”€ Backtest run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Backtest run —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const phase = ref('idle');
     const running = computed(() => ['export', 'compile', 'test', 'compare'].includes(phase.value));
     const errorMessage = ref('');
@@ -1480,9 +1571,9 @@ createApp({
     }
     function stepIcon(step) {
       const c = stepClass(step);
-      if (c === 'done') return 'âœ“';
-      if (c === 'active') return 'â€¦';
-      if (c === 'error') return 'âœ—';
+      if (c === 'done') return '✓“';
+      if (c === 'active') return '…';
+      if (c === 'error') return '✓—';
       return 'Â·';
     }
 
@@ -1496,8 +1587,8 @@ createApp({
       // Round to avoid floating-point display artifacts (e.g. 2063.14990234375)
       if (typeof sqxVal === 'number' && !Number.isInteger(sqxVal)) sqxVal = Math.round(sqxVal * 100) / 100;
       if (typeof mt5Val === 'number' && !Number.isInteger(mt5Val)) mt5Val = Math.round(mt5Val * 100) / 100;
-      const fmt = (v) => (v == null || Number.isNaN(v) ? 'â€”' : (isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })));
-      let diffDisplay = 'â€”', diffClass = '';
+      const fmt = (v) => (v == null || Number.isNaN(v) ? '—' : (isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })));
+      let diffDisplay = '—', diffClass = '';
       if (sqxVal != null && mt5Val != null && sqxVal !== 0) {
         const pct = Math.abs((mt5Val - sqxVal) / sqxVal) * 100;
         diffDisplay = (mt5Val >= sqxVal ? '+' : '') + ((mt5Val - sqxVal) / sqxVal * 100).toFixed(1) + '%';
@@ -1612,7 +1703,7 @@ createApp({
       }
     }
 
-    // â”€â”€ Equity curves â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Equity curves —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const batchEquity = ref({});
     const batchEquityLoading = ref({});
     const equityDrawState = {};
@@ -1655,7 +1746,7 @@ createApp({
 
     function fmtMoney(v) {
       const n = Number(v);
-      if (!Number.isFinite(n)) return 'â€”';
+      if (!Number.isFinite(n)) return '—';
       return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
     }
 
@@ -1665,7 +1756,7 @@ createApp({
       if (!side) return 'No data';
       if (!side.points || !side.points.length) return side.error || 'No data';
       const pts = side.points;
-      return fmtMoney(pts[0][1]) + ' â†’ ' + fmtMoney(pts[pts.length - 1][1])
+      return fmtMoney(pts[0][1]) + ' →’ ' + fmtMoney(pts[pts.length - 1][1])
         + ' Â· ' + (pts.length - 1) + ' trades';
     }
 
@@ -1747,7 +1838,7 @@ createApp({
       ctx.fillStyle = color + '26'; ctx.fill();
     }
 
-    // â”€â”€ Batch mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Batch mode —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const batchRunning = ref(false);
     const batchResults = ref([]);
     const batchTotal = ref(0);
@@ -1766,13 +1857,13 @@ createApp({
     }
 
     function formatBatchVal(v, isPct) {
-      if (v == null || Number.isNaN(v)) return 'â€”';
+      if (v == null || Number.isNaN(v)) return '—';
       // Round to avoid floating-point artifacts
       const n = typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 100) / 100 : v;
       return isPct ? n.toFixed(2) + '%' : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
     function batchDiffPct(sqxVal, mt5Val) {
-      if (!sqxVal || !mt5Val) return 'â€”';
+      if (!sqxVal || !mt5Val) return '—';
       return ((mt5Val - sqxVal) / Math.abs(sqxVal) * 100 >= 0 ? '+' : '') + ((mt5Val - sqxVal) / Math.abs(sqxVal) * 100).toFixed(1) + '%';
     }
     function batchDiffClass(sqxVal, mt5Val) {
@@ -1890,7 +1981,7 @@ createApp({
       }
     }
 
-    // â”€â”€ MT5 Instances â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ MT5 Instances —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const INSTANCES_KEY = 'mt5b_instances';
     const defaultInstances = [
       { enabled: true, terminalPath: '' },
@@ -1941,7 +2032,7 @@ createApp({
       return instances.value.filter(i => i.enabled !== false && i.terminalPath);
     }
 
-    // â”€â”€ UI toggles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ UI toggles —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const showInstances = ref(false);
     const showSettings = ref(false);
     const settingsForm = reactive({
@@ -1983,7 +2074,7 @@ createApp({
       }
     }
 
-    // â”€â”€ Mount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // —€—€ Mount —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     onMounted(async () => {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
@@ -2035,6 +2126,8 @@ createApp({
       logEntries, logFilter, logExpanded, filteredLogEntries, clearLog, copyLog,
       // Unified Results
       resultsAggregate, resultsAggregateLoading,
+      // Collapsible Sections
+      sectionCollapse, toggleSection,
     };
   },
 }).mount('#app');
