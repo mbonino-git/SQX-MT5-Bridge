@@ -769,100 +769,117 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
             bt_body["deposit"] = canon["deposit"]
         bodies.append(bt_body)
 
-    # Auto-compile all strategies before launching backtests
-    compiled, failed = await compile_portfolio_strategies(
-        project, "Results", strategy_list, settings.terminal_path,
-    )
-    print(f"[COMPILER] Portfolio {portfolio}: {len(compiled)} compiled, {len(failed)} failed")
-    for f in failed:
-        print(f"[COMPILER] Failed: {f['name']}: {f['error']}")
+    # Run compile + sequential backtests in background (non-blocking)
+    asyncio.create_task(_run_portfolio_backtest(
+        portfolio_key, project, databank, portfolio,
+        strategy_list, valid_strats, bodies, deposit,
+    ))
 
-    # Initialize in-memory tracking BEFORE the sequential loop so
-    # portfolio-status can see it while we wait for jobs
-    job_list = []
-    _portfolio_backtest_jobs[portfolio_key] = {
-        "project": project,
-        "databank": databank,
-        "portfolio": portfolio,
-        "strategies": strategy_list,
-        "jobs": job_list,
+    return {
+        "ok": True,
+        "portfolioKey": portfolio_key,
+        "jobs": [],
         "total": len(strategy_list),
-        "completed": 0,
-        "deposit": deposit,
-        "started_at": time.time(),
+        "skipped": 0,
     }
 
-    # Launch backtest jobs sequentially: wait for each to complete before launching the next
-    skipped = 0
-    for idx, (orig_strat, bt_body) in enumerate(zip(valid_strats, bodies)):
-        strat = orig_strat[1]
-        try:
-            # Create job in DB and start MT5 thread
-            job_id = _create_backtest_job(bt_body)
-            if isinstance(job_id, dict):
+
+async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
+                                   strategy_list, valid_strats, bodies, deposit):
+    """Background task: compile all strategies then run backtests sequentially."""
+    try:
+        # Auto-compile all strategies before launching backtests
+        compiled, failed = await compile_portfolio_strategies(
+            project, "Results", strategy_list, settings.terminal_path,
+        )
+        print(f"[COMPILER] Portfolio {portfolio}: {len(compiled)} compiled, {len(failed)} failed")
+        for f in failed:
+            print(f"[COMPILER] Failed: {f['name']}: {f['error']}")
+
+        # Initialize in-memory tracking
+        job_list = []
+        _portfolio_backtest_jobs[portfolio_key] = {
+            "project": project,
+            "databank": databank,
+            "portfolio": portfolio,
+            "strategies": strategy_list,
+            "jobs": job_list,
+            "total": len(strategy_list),
+            "completed": 0,
+            "deposit": deposit,
+            "started_at": time.time(),
+        }
+
+        # Launch backtest jobs sequentially: wait for each to complete before the next
+        skipped = 0
+        for idx, (orig_strat, bt_body) in enumerate(zip(valid_strats, bodies)):
+            strat = orig_strat[1]
+            try:
+                # Create job in DB and start MT5 thread
+                job_id = _create_backtest_job(bt_body)
+                if isinstance(job_id, dict):
+                    skipped += 1
+                    job_list.append({
+                        "index": idx,
+                        "jobId": None,
+                        "strategy": strat["name"],
+                        "status": "failed",
+                        "error": job_id.get("error", "Unknown error"),
+                    })
+                    print(f"[PORTFOLIO] Job {idx+1}/{len(bodies)} failed to create: {job_id.get('error')}")
+                    continue
+
+                job_list.append({
+                    "index": idx,
+                    "jobId": job_id,
+                    "strategy": strat["name"],
+                    "status": "testing",
+                })
+                print(f"[PORTFOLIO] Created job {idx+1}/{len(bodies)}: {strat['name']} (job_id={job_id})")
+
+                # Wait for this job to complete before launching the next
+                max_wait = 3600  # 1 hour max per job
+                elapsed = 0
+                poll_interval = 30
+                while elapsed < max_wait:
+                    conn = _get_db()
+                    row = conn.execute(
+                        "SELECT status, result, error FROM jobs WHERE id = ?", (job_id,)
+                    ).fetchone()
+                    conn.close()
+                    if not row:
+                        break
+                    status = row[0]
+                    if status in ("done", "error"):
+                        break
+                    await asyncio.sleep(poll_interval)
+                    elapsed += poll_interval
+                    if elapsed % 120 == 0:
+                        print(f"[PORTFOLIO] Waiting for job {idx+1}... ({elapsed}s, status={status})")
+
+                print(f"[PORTFOLIO] Job {idx+1} ({strat['name']}): completed with status={status}")
+
+                # Update completed count
+                _portfolio_backtest_jobs[portfolio_key]["completed"] = sum(
+                    1 for j in job_list if j["status"] in ("done", "error")
+                )
+
+            except Exception as e:
                 skipped += 1
                 job_list.append({
                     "index": idx,
                     "jobId": None,
                     "strategy": strat["name"],
                     "status": "failed",
-                    "error": job_id.get("error", "Unknown error"),
+                    "error": str(e),
                 })
-                print(f"[PORTFOLIO] Job {idx+1}/{len(bodies)} failed to create: {job_id.get('error')}")
-                continue
 
-            job_list.append({
-                "index": idx,
-                "jobId": job_id,
-                "strategy": strat["name"],
-                "status": "testing",
-            })
-            print(f"[PORTFOLIO] Created job {idx+1}/{len(bodies)}: {strat['name']} (job_id={job_id})")
+        print(f"[PORTFOLIO] Portfolio {portfolio}: all {len(job_list)} jobs done ({skipped} skipped)")
 
-            # Wait for this job to complete before launching the next
-            max_wait = 3600  # 1 hour max per job
-            elapsed = 0
-            poll_interval = 30
-            while elapsed < max_wait:
-                conn = _get_db()
-                row = conn.execute(
-                    "SELECT status, result, error FROM jobs WHERE id = ?", (job_id,)
-                ).fetchone()
-                conn.close()
-                if not row:
-                    break
-                status = row[0]
-                if status in ("done", "error"):
-                    break
-                await asyncio.sleep(poll_interval)
-                elapsed += poll_interval
-                if elapsed % 120 == 0:
-                    print(f"[PORTFOLIO] Waiting for job {idx+1}... ({elapsed}s, status={status})")
+    except Exception as e:
+        print(f"[PORTFOLIO] Portfolio {portfolio} background task failed: {e}")
 
-            print(f"[PORTFOLIO] Job {idx+1} ({strat['name']}): completed with status={status}")
 
-            # Update completed count in in-memory tracking
-            _portfolio_backtest_jobs[portfolio_key]["completed"] = sum(
-                1 for j in job_list if j["status"] in ("done", "error")
-            )
-
-        except Exception as e:
-            skipped += 1
-            job_list.append({
-                "index": idx,
-                "jobId": None,
-                "strategy": strat["name"],
-                "status": "failed",
-                "error": str(e),
-            })
-
-    return {
-        "ok": True,
-        "portfolioKey": portfolio_key,
-        "jobs": job_list,
-        "total": len(job_list),
-        "skipped": skipped,
-    }
 
 
 @app.get("/portfolio-status")
@@ -1777,6 +1794,21 @@ def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
         return False, "", "Missing strategyName"
 
     safe_name = re.sub(r'\s+', '_', strategy_name).replace("\\", "_").replace("/", "_").strip()
+    data_dir = Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    mq5_file = data_dir / f"{safe_name}.mq5"
+    ex5_file = mq5_file.with_suffix(".ex5")
+
+    # CACHE CHECK: If .ex5 exists and is newer than .mq5, skip compilation
+    if ex5_file.exists() and mq5_file.exists():
+        try:
+            ex5_mtime = ex5_file.stat().st_mtime
+            mq5_mtime = mq5_file.stat().st_mtime
+            if ex5_mtime >= mq5_mtime - 1:  # within 1s tolerance
+                return True, str(ex5_file), ""
+        except OSError:
+            pass
 
     # Get real MQ5 source code from SQX
     mq5_source = sqx_client.get_source_code(
@@ -1787,10 +1819,6 @@ def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
         return False, "", f"Failed to get MQ5 source from SQX for '{strategy_name}'"
 
     # Write MQ5 to Experts/SQXBridge/
-    data_dir = Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    mq5_file = data_dir / f"{safe_name}.mq5"
     mq5_file.write_text(mq5_source, encoding="utf-8")
 
     log_file = data_dir / f"{safe_name}.compile.log"
