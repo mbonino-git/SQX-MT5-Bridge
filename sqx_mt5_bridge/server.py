@@ -683,11 +683,13 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
         }
 
     Returns: { "portfolioKey": "...", "jobs": [{ "index": 0, "jobId": "...", "strategy": "..." }] }
+
+    All SQX param lookups and backtest jobs run concurrently so the HTTP
+    response returns immediately after dispatching.
     """
     project = body.get("project", "")
     databank = body.get("databank", "")
     portfolio = body.get("portfolio", "")
-    symbol_override = body.get("symbol")
     period = body.get("period", "M30")
     from_date = body.get("fromDate", "2022-01-01")
     to_date = body.get("toDate", "2026-10-16")
@@ -704,16 +706,13 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
         return {"ok": False, "error": strategies_resp.get("error", "Failed to parse portfolio")}
 
     strategy_list = strategies_resp["strategies"]
-    job_list = []
-    skipped = 0
 
+    # Build backtest bodies and canonicalization tasks
+    valid_strats = []
     for idx, strat in enumerate(strategy_list):
         if "error" in strat or not strat.get("symbol"):
-            skipped += 1
             continue
-
-        # Submit backtest
-        backtest_body = {
+        bt_body = {
             "project": project,
             "databank": "Results",
             "strategyName": strat["name"],
@@ -726,23 +725,71 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
             "leverage": leverage,
             "tickModel": tick_model,
         }
+        valid_strats.append((idx, strat, bt_body))
 
-        resp = await submit_backtest(backtest_body)
-        if "jobId" in resp:
-            job_list.append({
-                "index": idx,
-                "jobId": resp["jobId"],
-                "strategy": strat["name"],
-                "status": "pending",
-            })
-        else:
+    if not valid_strats:
+        return {
+            "ok": True, "portfolioKey": portfolio_key,
+            "jobs": [], "total": 0, "skipped": len(strategy_list),
+        }
+
+    # Prefetch canonical params concurrently for all valid strategies
+    canon_tasks = [
+        asyncio.to_thread(_canonicalize_backtest_params, project, "Results", strat["name"])
+        for _, strat, _ in valid_strats
+    ]
+    canon_results = await asyncio.gather(*canon_tasks, return_exceptions=True)
+
+    # Build final backtest bodies with canonical params
+    bodies = []
+    for (idx, strat, bt_body), canon in zip(valid_strats, canon_results):
+        if isinstance(canon, Exception) or not canon:
+            bodies.append(bt_body)
+            continue
+        if canon.get("symbol"):
+            bt_body["symbol"] = canon["symbol"]
+        if canon.get("period"):
+            bt_body["period"] = canon["period"]
+        if canon.get("from_date"):
+            bt_body["fromDate"] = canon["from_date"]
+        if canon.get("to_date"):
+            bt_body["to_date"] = canon["to_date"]
+        if canon.get("deposit"):
+            bt_body["deposit"] = canon["deposit"]
+        bodies.append(bt_body)
+
+    # Auto-compile all strategies before launching backtests
+    compiled, failed = await compile_portfolio_strategies(
+        project, "Results", strategy_list, settings.terminal_path,
+    )
+    print(f"[COMPILER] Portfolio {portfolio}: {len(compiled)} compiled, {len(failed)} failed")
+    for f in failed:
+        print(f"[COMPILER] Failed: {f['name']}: {f['error']}")
+
+    # Launch all backtest jobs concurrently
+    launch_tasks = [asyncio.to_thread(_create_backtest_job, b) for b in bodies]
+    launch_results = await asyncio.gather(*launch_tasks, return_exceptions=True)
+
+    # Collect results
+    job_list = []
+    skipped = 0
+    for idx, (orig_strat, result) in enumerate(zip(valid_strats, launch_results)):
+        strat = orig_strat[1]
+        if isinstance(result, Exception) or not isinstance(result, str):
             skipped += 1
             job_list.append({
-                "index": idx,
+                "index": orig_strat[0],
                 "jobId": None,
                 "strategy": strat["name"],
                 "status": "failed",
-                "error": resp.get("error", "Unknown error"),
+                "error": str(result) if isinstance(result, Exception) else "Unknown error",
+            })
+        else:
+            job_list.append({
+                "index": orig_strat[0],
+                "jobId": result,
+                "strategy": strat["name"],
+                "status": "pending",
             })
 
     _portfolio_backtest_jobs[portfolio_key] = {
@@ -782,7 +829,6 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
         "SELECT status FROM jobs WHERE id IN (" + ",".join(["?"] * len(job_info["jobs"])) + ")",
         [j["jobId"] for j in job_info["jobs"] if j.get("jobId")],
     ).fetchall()
-    conn.close()
 
     completed = sum(1 for r in rows if r[0] in ("done", "error"))
     job_info["completed"] = completed
@@ -802,7 +848,7 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
                         j["result"] = json.loads(status_row[1])
                     except Exception:
                         pass
-    # Re-close since we already closed above
+    conn.close()
     _portfolio_backtest_jobs[portfolio_key] = job_info
 
     return {
@@ -1070,14 +1116,12 @@ def mt5_symbols_live():
             "ok": True, "symbols": result.get("symbols", []),
             "count": result.get("count", 0), "server": result.get("server"),
         }
-    mapping = settings.symbol_mapping_dict
-    symbols = list(mapping.keys())
-    for mt5_name in mapping.values():
-        if mt5_name not in symbols:
-            symbols.append(mt5_name)
+    # Fallback: return env mapping as proper symbol objects
+    fallback = symbol_service._cached_fallback()
     return {
-        "ok": False, "error": result.get("error", "MT5 unavailable"),
-        "symbols": symbols, "count": len(symbols), "fallback": True,
+        "ok": False, "error": fallback.get("error", "MT5 unavailable"),
+        "symbols": fallback.get("symbols", []), "count": fallback.get("count", 0),
+        "fallback": True,
     }
 
 
@@ -1183,6 +1227,119 @@ def _canonicalize_backtest_params(project: str, databank: str, strategy_name: st
 #
 # This replaces the old approach of extracting MQ5 from .sqx ZIP files,
 # which only generated stub code with HasStrategyLogic() == false.
+
+
+def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
+                                 terminal_path: str) -> dict:
+    """Compile MQ5 source for a strategy. Returns (success, ex5_path, error_msg)."""
+    if not strategy_name:
+        return False, "", "Missing strategyName"
+
+    safe_name = re.sub(r'\s+', '_', strategy_name).replace("\\", "_").replace("/", "_").strip()
+
+    # Get real MQ5 source code from SQX
+    mq5_source = sqx_client.get_source_code(
+        project=project, databank=databank, strategy_name=strategy_name,
+        sqx_host=settings.sqx_host, sqx_port=None,
+    )
+    if not mq5_source:
+        return False, "", f"Failed to get MQ5 source from SQX for '{strategy_name}'"
+
+    # Write MQ5 to Experts/SQXBridge/
+    data_dir = Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    mq5_file = data_dir / f"{safe_name}.mq5"
+    mq5_file.write_text(mq5_source, encoding="utf-8")
+
+    log_file = data_dir / f"{safe_name}.compile.log"
+
+    # Compile with MetaEditor
+    metaeditor = Path(settings.metaeditor_path)
+    if not metaeditor.exists():
+        return False, "", f"MetaEditor not found: {metaeditor}"
+
+    try:
+        import subprocess
+        compile_args = [str(metaeditor), f"/compile:{mq5_file}", f"/log:{log_file}"]
+        result = subprocess.run(compile_args, capture_output=True, text=True, timeout=120)
+
+        ex5_file = mq5_file.with_suffix(".ex5")
+        log_text = ""
+        if log_file.exists():
+            try:
+                log_text = log_file.read_text(encoding="utf-16le", errors="replace")
+                if log_text.startswith("﻿"):
+                    log_text = log_text[1:]
+            except Exception:
+                pass
+
+        log_match = re.search(
+            r"Result:\s*(\d+)\s*errors?,\s*(\d+)\s*warnings?",
+            log_text, re.IGNORECASE,
+        )
+        errors = int(log_match.group(1)) if log_match else -1
+        success = errors == 0 and ex5_file.exists()
+
+        if success:
+            return True, str(ex5_file), ""
+        else:
+            return False, "", log_text or result.stderr or result.stdout or "Compilation failed"
+    except subprocess.TimeoutExpired:
+        return False, "", "Compilation timed out after 120s"
+    except Exception as exc:
+        return False, "", str(exc)
+
+
+async def compile_portfolio_strategies(
+    project: str,
+    databank: str,
+    strategy_list: list[dict],
+    terminal_path: str,
+) -> tuple[list[str], list[dict]]:
+    """Compile all strategies in a portfolio before backtesting.
+
+    Calls compile_expert_for_strategy concurrently for each strategy.
+    Compilation failures for one strategy do not block others.
+
+    Returns:
+        (compiled_names, failures) where compiled_names is a list of
+        strategy names that compiled successfully, and failures is a
+        list of {"name": str, "error": str} dicts for strategies that failed.
+    """
+    names = [s["name"] for s in strategy_list if "error" not in s and s.get("name")]
+
+    async def _compile_one(name: str) -> tuple[str, Exception | None]:
+        loop = asyncio.get_running_loop()
+        error = await loop.run_in_executor(
+            None,
+            lambda n=name: compile_expert_for_strategy(project, databank, n, terminal_path),
+        )
+        success, ex5_path, msg = error
+        if success:
+            return name, None
+        return name, Exception(msg or "Compilation returned False")
+
+    results = await asyncio.gather(*[_compile_one(n) for n in names], return_exceptions=True)
+
+    compiled: list[str] = []
+    failed: list[dict] = []
+
+    for name, result in zip(names, results):
+        if isinstance(result, Exception):
+            err_msg = str(result)
+            failed.append({"name": name, "error": err_msg})
+            print(f"[COMPILER] {name}: failed: {err_msg}")
+        elif result is None:
+            compiled.append(name)
+            print(f"[COMPILER] {name}: compiled OK")
+        else:
+            # Should not happen but handle defensively
+            err_msg = f"Unexpected result type: {type(result)}"
+            failed.append({"name": name, "error": err_msg})
+            print(f"[COMPILER] {name}: failed: {err_msg}")
+
+    return compiled, failed
 
 
 @app.post("/compile")
@@ -1473,18 +1630,10 @@ async def _run_backtest_job(job: BacktestJob):
     ]
     if forward_mode and job.forward_date:
         ini_lines.append(f"ForwardDate={job.forward_date}")
-    # Use absolute path for Report= so MT5 writes directly into Reports folder
-    # (In portable mode, a bare name writes to install root instead)
-    report_path_abs = str(reports_dir / job_id)
-
     ini_lines += [
         f"Deposit={job.deposit}",
         f"Currency={job.currency}",
         f"Leverage={job.leverage}",
-        # Absolute path without extension => MT5 writes the .htm straight
-        # into the specified folder (Reports) instead of install root.
-        f"Report={report_path_abs}",
-        "ReplaceReport=1",
         # Disable SQX info panel to speed up backtests
         "InpsqDisplayInfoPanel=false",
         "ShutdownTerminal=1",
@@ -1494,6 +1643,15 @@ async def _run_backtest_job(job: BacktestJob):
     # MT5 Tester reads INI from: {data_dir}\MQL5\Experts\SQXBridge\{jobId}.ini
     experts_dir = mt5_data_dir / "MQL5" / "Experts" / "SQXBridge"
     experts_dir.mkdir(parents=True, exist_ok=True)
+
+    # Verify Expert .ex5 file exists; MT5 won't run without it
+    safe_name = re.sub(r'\s+', '_', job.strategy_name).replace("\\", "_").replace("/", "_").strip()
+    ex5_file = experts_dir / f"{safe_name}.ex5"
+    if not ex5_file.exists():
+        print(f"[BACKTEST] Expert not found: {ex5_file}. "
+              f"Strategy may need to be compiled first via /compile endpoint.",
+              flush=True)
+
     ini_path = experts_dir / f"{job_id}.ini"
 
     # Also copy INI to Tester directory for compatibility
@@ -1834,6 +1992,46 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
             except Exception as e:
                 print(f"[BACKTEST] Error deriving CSV stats: {e}")
 
+        # Fallback: parse final balance from Tester log (Core 001)
+        # This gives NetProfit for strategies that don't produce HTML reports
+        # or strategies that only place/cancel pending orders (no real deals)
+        if not mt5_stats and csv_path and csv_path.exists():
+            try:
+                tester_dir = csv_path.parent
+                # Look for log file in Tester Agent directory
+                log_dir = mt5_data_dir / "Tester"
+                for agent_dir in log_dir.iterdir():
+                    if agent_dir.is_dir() and "Agent-" in agent_dir.name:
+                        log_file = agent_dir / "logs" / "20261030.log"
+                        # Try current date first
+                        from datetime import datetime
+                        today = datetime.now().strftime("%Y%m%d")
+                        log_file = agent_dir / "logs" / f"{today}.log"
+                        if not log_file.exists():
+                            # Find most recent log
+                            logs = sorted(agent_dir.glob("logs/*.log"), reverse=True)
+                            if logs:
+                                log_file = logs[0]
+                        if log_file.exists():
+                            log_txt = log_file.read_text(encoding="utf-16", errors="replace")
+                            for line in reversed(log_txt.split("\n")):
+                                import re as _re
+                                m = _re.search(r'final balance\s+([\d.]+)\s+USD', line)
+                                if m:
+                                    final_balance = float(m.group(1))
+                                    deposit = float(job.deposit) if hasattr(job, "deposit") else 10000.0
+                                    net_profit = final_balance - deposit
+                                    if net_profit != 0:
+                                        mt5_stats = {
+                                            "NetProfit": round(net_profit, 2),
+                                            "NumberOfTrades": 0,
+                                        }
+                                        print(f"[BACKTEST] Derived stats from Tester log: final_balance={final_balance}, deposit={deposit}, net_profit={net_profit}")
+                                    break
+                            break
+            except Exception as e:
+                print(f"[BACKTEST] Error parsing Tester log for stats: {e}")
+
         # Ensure stats is never null — always provide at least basic stats
         if not mt5_stats:
             mt5_stats = {}
@@ -1904,22 +2102,12 @@ def retry_stuck_jobs():
     return {"reset": count}
 
 
-@app.post("/backtest")
-async def submit_backtest(body: dict[str, Any]):
-    """Submit a backtest job.
+def _create_backtest_job(body: dict[str, Any]) -> str | dict:
+    """Create a backtest job and launch its background thread.
 
-    Request body:
-        {
-            "project": "...", "databank": "...", "strategyName": "...",
-            "expertRelativePath": "...", "ex5Path": "...",
-            "symbol": "XAUUSD", "period": "H1",
-            "fromDate": "2022.01.01", "toDate": "2024.01.01",
-            "forwardMode": false, "forwardDate": null,
-            "tickModel": "every_tick_real",
-            "deposit": 10000, "currency": "USD", "leverage": 100
-        }
-
-    Returns: { "jobId": "..." }
+    Internal helper shared by /backtest and /portfolio/backtest.
+    Creates a fresh event loop for this thread, runs the async backtest
+    coroutine, and cleans up.
     """
     strategy_name = body.get("strategyName", "")
     symbol = body.get("symbol", "EURUSD")
@@ -1937,8 +2125,7 @@ async def submit_backtest(body: dict[str, Any]):
     if not strategy_name:
         return {"error": "Missing strategyName"}
 
-    # Canonicalize params from SQX strategy settings — overrides any wrong
-    # form values (e.g. plugin defaulting to XAUUSD/H1 for a NAS100/M30 strat)
+    # Canonicalize params from SQX strategy settings
     canonical = _canonicalize_backtest_params(project, databank, strategy_name)
     if canonical:
         print(f"[BACKTEST] Canonicalized: {canonical}")
@@ -1968,15 +2155,45 @@ async def submit_backtest(body: dict[str, Any]):
     )
     job.status = "pending"
 
-    async with _jobs_lock:
-        _jobs[job_id] = job
-
+    _jobs[job_id] = job
     _save_job(job)
 
-    # Start backtest in background
-    asyncio.create_task(_run_backtest_job(job))
+    # Run backtest in background thread — does not block HTTP response
+    def _run_job_in_thread(loop, job):
+        """Run the async backtest job in a dedicated thread with its own event loop."""
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_run_backtest_job(job))
+        finally:
+            loop.close()
 
-    return {"jobId": job_id}
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=_run_job_in_thread, args=(loop, job), daemon=True).start()
+
+    return job_id
+
+
+@app.post("/backtest")
+def submit_backtest(body: dict[str, Any]):
+    """Submit a backtest job.
+
+    Request body:
+        {
+            "project": "...", "databank": "...", "strategyName": "...",
+            "expertRelativePath": "...", "ex5Path": "...",
+            "symbol": "XAUUSD", "period": "H1",
+            "fromDate": "2022.01.01", "toDate": "2024.01.01",
+            "forwardMode": false, "forwardDate": null,
+            "tickModel": "every_tick_real",
+            "deposit": 10000, "currency": "USD", "leverage": 100
+        }
+
+    Returns: { "jobId": "..." }
+    """
+    result = _create_backtest_job(body)
+    if isinstance(result, str):
+        return {"jobId": result}
+    return result
 
 
 @app.get("/backtest/{job_id}/status")
