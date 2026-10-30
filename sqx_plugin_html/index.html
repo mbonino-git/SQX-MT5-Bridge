@@ -89,6 +89,14 @@
     font-size: 12px;
   }
 
+  input[type=date]::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+
+  [data-theme="light"] input[type=date]::-webkit-calendar-picker-indicator {
+    filter: none;
+  }
+
   button {
     background: var(--primary);
     color: #fff;
@@ -526,11 +534,11 @@
               </div>
               <div class="field">
                 <label>Currency</label>
-                <input type="text" v-model="portfolioCurrency">
+                <input type="text" v-model="form.currency">
               </div>
               <div class="field">
                 <label>Leverage (1:X)</label>
-                <input type="number" v-model.number="portfolioLeverage">
+                <input type="number" v-model.number="form.leverage">
               </div>
             </div>
           </div>
@@ -1150,8 +1158,8 @@ createApp({
           toDate: portfolioToDate.value,
           tickModel: portfolioTickModel.value,
           deposit: portfolioInitialCapital.value || 10000,
-          currency: portfolioCurrency.value || 'USD',
-          leverage: portfolioLeverage.value || 100,
+          currency: form.currency || 'USD',
+          leverage: form.leverage || 100,
         };
         // Map back to original indices
         const selSet = _portfolioSelectedSet();
@@ -1344,8 +1352,6 @@ createApp({
     const portfolioFromDate = ref('');
     const portfolioToDate = ref('');
     const portfolioTickModel = ref('ohlc_1min');
-    const portfolioCurrency = ref('USD');
-    const portfolioLeverage = ref(100);
 
     async function loadBacktestSettings() {
       form.fromDate = ''; form.toDate = ''; form.symbol = ''; form.deposit = null;
@@ -1373,7 +1379,7 @@ createApp({
 
     watch(selectedStrategyName, (newVal, oldVal) => {
       if (newVal !== oldVal) loadBacktestSettings();
-    });
+    }, { immediate: true });
 
     // ── Symbols ─────────────────────────────────────────────────────
     const mt5Symbols = ref([]);
