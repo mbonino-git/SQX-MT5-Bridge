@@ -383,9 +383,9 @@
         </div>
       </div>
 
-      <!-- 2. MT5 config -->
+      <!-- 2A. Single Backtest -->
       <div class="card" v-if="selectedStrategyName">
-        <h3>2. MT5 test configuration</h3>
+        <h3>2A. Single Backtest</h3>
         <div class="row">
           <div class="field">
             <label>Symbol (historical data available in your MT5)</label>
@@ -416,24 +416,12 @@
         </div>
         <div class="row">
           <div class="field">
-            <label>Date range (same as in SQX)</label>
-            <div v-if="loadingBacktestSettings" class="settings-box">Loading…</div>
-            <template v-else-if="backtestSettingsError">
-              <div class="error-box">{{ backtestSettingsError }}</div>
-              <button type="button" class="secondary" @click="loadBacktestSettings">Retry</button>
-            </template>
-            <div v-else-if="form.fromDate && form.toDate" class="settings-box">{{ form.fromDate }} → {{ form.toDate }}</div>
-            <div v-else class="settings-box">Choose a strategy first.</div>
+            <label>Start date</label>
+            <input type="date" v-model="form.fromDate">
           </div>
-        </div>
-        <div class="row">
-          <div class="field checkbox">
-            <input type="checkbox" id="fw" v-model="form.forwardMode">
-            <label for="fw" style="font-size:12px;color:var(--text-main);">Forward Period</label>
-          </div>
-          <div class="field" v-if="form.forwardMode">
-            <label>Forward Date (from)</label>
-            <input type="date" v-model="form.forwardDate">
+          <div class="field">
+            <label>End date</label>
+            <input type="date" v-model="form.toDate">
           </div>
         </div>
         <div class="row">
@@ -446,10 +434,6 @@
               <option value="open_prices">Open prices only</option>
               <option value="math_calculations">Math calculations</option>
             </select>
-          </div>
-          <div class="field">
-            <label>Optimization</label>
-            <input type="text" value="Disabled" disabled>
           </div>
         </div>
         <div class="row">
@@ -510,6 +494,46 @@
         </div>
         <div v-if="portfolioError" class="error-box">{{ portfolioError }}</div>
         <div v-else-if="portfolioStrategies.length">
+          <!-- Portfolio config (same as single backtest) -->
+          <div style="background:var(--bg-surface);padding:12px;border-radius:8px;margin-bottom:10px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-main);">Portfolio Backtest Options</div>
+            <div class="row" style="margin-bottom:8px;">
+              <div class="field">
+                <label>Start date</label>
+                <input type="date" v-model="portfolioFromDate">
+              </div>
+              <div class="field">
+                <label>End date</label>
+                <input type="date" v-model="portfolioToDate">
+              </div>
+            </div>
+            <div class="row" style="margin-bottom:8px;">
+              <div class="field">
+                <label>Tick modeling</label>
+                <select v-model="portfolioTickModel">
+                  <option value="every_tick_real">Every tick (recommended)</option>
+                  <option value="every_tick">Every tick (generated)</option>
+                  <option value="ohlc_1min">1 minute OHLC</option>
+                  <option value="open_prices">Open prices only</option>
+                  <option value="math_calculations">Math calculations</option>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="field">
+                <label>Initial deposit (same as in SQX)</label>
+                <div class="settings-box">{{ portfolioInitialCapital ? portfolioInitialCapital.toLocaleString() : '—' }}</div>
+              </div>
+              <div class="field">
+                <label>Currency</label>
+                <input type="text" v-model="portfolioCurrency">
+              </div>
+              <div class="field">
+                <label>Leverage (1:X)</label>
+                <input type="number" v-model.number="portfolioLeverage">
+              </div>
+            </div>
+          </div>
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
             {{ portfolioStrategies.length }} strategies found · {{ portfolioFromLabel }}
             <span v-if="portfolioInitialCapital"> · Initial capital: {{ portfolioInitialCapital.toLocaleString() }}</span>
@@ -1084,6 +1108,8 @@ createApp({
           .filter(i => i >= 0);
         if (r.fromDate && r.toDate) {
           portfolioFromLabel.value = r.fromDate.replace('.', '-') + ' → ' + r.toDate.replace('.', '-');
+          portfolioFromDate.value = r.fromDate.replace('.', '-');
+          portfolioToDate.value = r.toDate.replace('.', '-');
         } else {
           portfolioFromLabel.value = '';
         }
@@ -1120,6 +1146,12 @@ createApp({
           databank: portfolioDatabank.value,
           portfolio: selectedPortfolio.value,
           strategyIndices: selectedStrats.map(s => s.__origIdx),
+          fromDate: portfolioFromDate.value,
+          toDate: portfolioToDate.value,
+          tickModel: portfolioTickModel.value,
+          deposit: portfolioInitialCapital.value || 10000,
+          currency: portfolioCurrency.value || 'USD',
+          leverage: portfolioLeverage.value || 100,
         };
         // Map back to original indices
         const selSet = _portfolioSelectedSet();
@@ -1304,9 +1336,16 @@ createApp({
     const backtestSettingsError = ref('');
     const form = reactive({
       symbol: '', period: 'H1', fromDate: '', toDate: '',
-      forwardMode: false, forwardDate: '', tickModel: 'ohlc_1min',
+      tickModel: 'ohlc_1min',
       deposit: null, currency: 'USD', leverage: 100,
     });
+
+    // Portfolio config (same options as single backtest)
+    const portfolioFromDate = ref('');
+    const portfolioToDate = ref('');
+    const portfolioTickModel = ref('ohlc_1min');
+    const portfolioCurrency = ref('USD');
+    const portfolioLeverage = ref(100);
 
     async function loadBacktestSettings() {
       form.fromDate = ''; form.toDate = ''; form.deposit = null;
@@ -1511,8 +1550,6 @@ createApp({
           symbol: form.symbol, period: form.period,
           fromDate: form.fromDate.replaceAll('-', '.'),
           toDate: form.toDate.replaceAll('-', '.'),
-          forwardMode: form.forwardMode,
-          forwardDate: form.forwardMode ? form.forwardDate.replaceAll('-', '.') : null,
           tickModel: form.tickModel,
           deposit: form.deposit, currency: form.currency, leverage: form.leverage,
         });
