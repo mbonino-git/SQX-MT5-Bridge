@@ -1565,9 +1565,10 @@ def _canonicalize_backtest_params(project: str, databank: str, strategy_name: st
     if parsed.timeframe:
         result["period"] = parsed.timeframe
     if parsed.from_date:
-        result["from_date"] = parsed.from_date
+        # MT5 expects hyphens (2022-01-01), not dots (2022.01.01)
+        result["from_date"] = parsed.from_date.replace(".", "-")
     if parsed.to_date:
-        result["to_date"] = parsed.to_date
+        result["to_date"] = parsed.to_date.replace(".", "-")
     if parsed.initial_capital:
         result["deposit"] = float(parsed.initial_capital)
     return result
