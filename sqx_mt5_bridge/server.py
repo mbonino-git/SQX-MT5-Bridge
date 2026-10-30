@@ -1729,8 +1729,32 @@ async def compile_strategy(body: dict[str, Any]):
     # Replace ALL whitespace (spaces, non-breaking spaces U+00A0, tabs, etc.) with underscores
     safe_name = re.sub(r'\s+', '_', strategy_name).replace("\\", "_").replace("/", "_").strip()
 
-    # Step 1: Get real MQ5 source code from SQX via HTTP API
-    # (Same mechanism BotPulse uses — calls SQX's sourcecode/print endpoint)
+    # Step 1: Determine the MT5 data directory
+    terminal_dir = Path(settings.terminal_path).parent
+    data_dir = terminal_dir / "MQL5" / "Experts" / "SQXBridge"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    mq5_file = data_dir / f"{safe_name}.mq5"
+    ex5_file = mq5_file.with_suffix(".ex5")
+    cache_hash_file = data_dir / f"{safe_name}.mq5.md5"
+
+    # Quick cache check: if .ex5 and .mq5.md5 exist, skip SQX call entirely
+    if ex5_file.exists() and cache_hash_file.exists():
+        try:
+            stored_hash = cache_hash_file.read_text(encoding="utf-8").strip()
+            if stored_hash:
+                print(f"[COMPILER] Cached (hash matched): {safe_name}")
+                return {
+                    "success": True,
+                    "expertRelativePath": f"SQXBridge\\{safe_name}",
+                    "ex5Path": str(ex5_file),
+                    "errors": 0,
+                    "cached": True,
+                }
+        except Exception:
+            pass
+
+    # Step 2: Get real MQ5 source code from SQX via HTTP API
     mq5_source = sqx_client.get_source_code(
         project=project,
         databank=databank,
@@ -1743,23 +1767,28 @@ async def compile_strategy(body: dict[str, Any]):
             "success": False,
             "errors": 1,
             "log": (
-                f"Failed to get MQ5 source code from SQX for "
+                f"Failed to get source code from SQX for "
                 f"'{strategy_name}'. Is SQX running on {settings.sqx_host}?"
             ),
         }
 
-    # Step 2: Determine the MT5 data directory and write MQ5 to Experts/SQXBridge/
-    # BotPulse uses: MQL5\Experts\SQXBridge\<safe_name>.mq5
-    terminal_dir = Path(settings.terminal_path).parent
-    # terminal_dir IS the data directory (C:\Terminal\WORKBENCH-01 for portable mode)
-    data_dir = terminal_dir / "MQL5" / "Experts" / "SQXBridge"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    mq5_file = data_dir / f"{safe_name}.mq5"
+    # Normalize line endings for consistent storage
+    mq5_source = mq5_source.replace('\r\n', '\n').replace('\r', '\n')
     mq5_file.write_text(mq5_source, encoding="utf-8")
 
-    # Also write log file path for MetaEditor
+    # Update the cache hash for next time
+    try:
+        import hashlib
+        stored_hash = hashlib.md5(mq5_source.encode("utf-8")).hexdigest()
+        cache_hash_file.write_text(stored_hash, encoding="utf-8")
+    except Exception:
+        pass
+
+    # Step 3: Compile with MetaEditor
     log_file = data_dir / f"{safe_name}.compile.log"
+    metaeditor = Path(settings.metaeditor_path)
+    if not metaeditor.exists():
+        return {"success": False, "errors": 1, "log": f"MetaEditor not found: {metaeditor}"}
 
     # Step 3: Compile with MetaEditor
     metaeditor = Path(settings.metaeditor_path)
@@ -1951,6 +1980,33 @@ def _kill_stale_mt5_processes(terminal_path: str) -> None:
             pass
 
 
+def _wait_mt5_ready(max_wait: float = 20, log_path: str = "") -> bool:
+    """Poll for MT5 Strategy Tester readiness instead of fixed sleep.
+    
+    Checks for Strategy Tester Agent process (appears when MT5 is ready
+    to run a backtest). Returns True when ready, False if timed out.
+    For sequential backtests where MT5 is already running, returns instantly.
+    """
+    import psutil
+    
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            # Check if Strategy Tester agent is already running (sequential backtests)
+            # or just started after launch
+            for p in psutil.process_iter(['name', 'exe']):
+                try:
+                    exe = p.info.get('exe') or ''
+                    if 'strategy_agent' in exe.lower():
+                        return True
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    pass
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
 # ── Async Backtest Execution ────────────────────────────────────────
 
 async def _run_backtest_job(job: BacktestJob):
@@ -2064,7 +2120,7 @@ async def _run_backtest_job(job: BacktestJob):
 
     # Kill any stale MT5 instance so the new one runs standalone
     _kill_stale_mt5_processes(job.terminal_path)
-    time.sleep(5)  # longer pause to let ports/resources release
+    # Brief pause — the real sync happens in _wait_mt5_ready below
 
     # Run blocking backtest in a separate thread to avoid blocking the event loop
     import threading
@@ -2095,7 +2151,7 @@ def _run_backtest_with_retry(job, ini_path, mt5_data_dir, reports_dir, experts_d
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(f"[BACKTEST] Attempt {attempt}/{max_retries} failed: {e}\n")
             if attempt < max_retries:
-                time.sleep(10)  # wait before retry
+                time.sleep(5)  # wait before retry
 
 
 def _run_backtest_sync(job, ini_path, mt5_data_dir, reports_dir, experts_dir, safe_name, expert_path):
@@ -2133,9 +2189,6 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"[BACKTEST] Launching: {tester_path} /portable /config:{ini_path}\n")
 
-    # Wait before launch to ensure port release
-    time.sleep(3)
-
     proc = subprocess.Popen(
         [str(tester_path), "/portable", f"/config:{ini_path}"],
         stdout=subprocess.DEVNULL,
@@ -2145,8 +2198,10 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
     # Register this PID so _kill_stale_mt5_processes doesn't kill it again
     _mt5_active_pids.add(proc.pid)
 
-    # Wait for MT5 to initialize before polling
-    time.sleep(10)
+    # Poll for MT5 initialization (max 20s instead of fixed 10s sleep)
+    init_start = time.time()
+    ready = _wait_mt5_ready(20, log_path)
+    print(f"[BACKTEST] MT5 ready: {ready} ({int(time.time() - init_start)}s)")
 
     # Activity monitoring (BotPulse pattern: 5 min inactivity, 6h hard cap)
     started_at = time.time()

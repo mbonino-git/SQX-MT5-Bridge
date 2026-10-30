@@ -543,7 +543,7 @@
         <h3>3. Progress</h3>
         <ul class="steps">
           <li :class="stepClass('export')"><span class="icon">{{ stepIcon('export') }}</span> Exporting MQ5 code from SQX</li>
-          <li :class="stepClass('compile')"><span class="icon">{{ stepIcon('compile') }}</span> Compiling in MetaEditor</li>
+          <li :class="stepClass('compile')"><span class="icon">{{ stepIcon('compile') }}</span> {{ compileCached ? 'Already compiled' : 'Compiling in MetaEditor' }}</li>
           <li :class="stepClass('test')"><span class="icon">{{ stepIcon('test') }}</span> Running Strategy Tester in MT5</li>
           <li :class="stepClass('compare')"><span class="icon">{{ stepIcon('compare') }}</span> Comparing results</li>
         </ul>
@@ -1304,7 +1304,7 @@ createApp({
     const backtestSettingsError = ref('');
     const form = reactive({
       symbol: '', period: 'H1', fromDate: '', toDate: '',
-      forwardMode: false, forwardDate: '', tickModel: 'every_tick_real',
+      forwardMode: false, forwardDate: '', tickModel: 'ohlc_1min',
       deposit: null, currency: 'USD', leverage: 100,
     });
 
@@ -1409,6 +1409,7 @@ createApp({
     const comparison = ref([]);
     const lastBacktestName = ref('');
     const lastAttemptedStep = ref(-1);
+    const compileCached = ref(false);
     const STEP_ORDER = ['export', 'compile', 'test', 'compare'];
     function stepClass(step) {
       const idx = STEP_ORDER.indexOf(step);
@@ -1487,12 +1488,16 @@ createApp({
         // Step 1: Export MQ5
         phase.value = 'export';
         lastAttemptedStep.value = 0;
+        compileCached.value = false;
 
         // Step 2: Compile
         phase.value = 'compile';
         const compileResult = await apiPost('/compile', { project, databank, strategyName });
         if (!compileResult.success) {
           throw new Error('Compilation error (' + compileResult.errors + ' errors). Log:\n' + (compileResult.log || '').slice(-800));
+        }
+        if (compileResult.cached) {
+          compileCached.value = true;
         }
 
         lastAttemptedStep.value = 1;
@@ -1941,7 +1946,7 @@ createApp({
       mt5Symbols,
       // Backtest
       runBacktest, phase, running, errorMessage, comparison,
-      stepClass, stepIcon, lastBacktestName,
+      stepClass, stepIcon, lastBacktestName, compileCached,
       // Batch
       batchRunning, batchResults, batchTotal, batchCompletedCount,
       batchErrorMessage, selectedBatchIdx, runBatch, abortBatch,
