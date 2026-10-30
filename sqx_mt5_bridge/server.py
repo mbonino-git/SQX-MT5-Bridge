@@ -44,17 +44,9 @@ app = FastAPI(title=settings.app_name, description="Bridge service between Strat
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: connect to MT5 once (background thread)
-    import threading
-    t = threading.Thread(
-        target=symbol_service._init_persistent,
-        args=(settings.terminal_path,),
-        daemon=True,
-    )
-    t.start()
+    # No persistent MT5 connection: symbols are fetched on demand and MT5 is
+    # closed right after each query (see symbol_service.query_live_symbols).
     yield
-    # Shutdown: close persistent MT5 connection
-    symbol_service.shutdown_persistent()
 
 
 app.router.lifespan_context = lifespan
@@ -1458,6 +1450,23 @@ async def update_settings_json(payload: dict[str, Any]):
 
 @app.get("/mt5-symbols/live")
 def mt5_symbols_live():
+    # Never touch MT5 while a backtest is pending/testing — initialize() would
+    # attach to (and shutdown() close) the very terminal running the test.
+    _active = any(j.status in ("pending", "testing") for j in _jobs.values())
+    if not _active:
+        for pf in _portfolio_backtest_jobs.values():
+            if any(j.get("status") in ("pending", "testing") for j in pf.get("jobs", [])):
+                _active = True
+                break
+    if _active:
+        fallback = symbol_service._cached_fallback()
+        return {
+            "ok": False,
+            "error": "A backtest is running — symbol refresh skipped so the Strategy Tester is not interrupted.",
+            "symbols": fallback.get("symbols", []), "count": fallback.get("count", 0),
+            "fallback": True,
+        }
+
     result = symbol_service.query_live_symbols(terminal_path=settings.terminal_path)
     if result.get("ok"):
         return {

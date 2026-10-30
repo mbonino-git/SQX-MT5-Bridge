@@ -465,10 +465,10 @@
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button @click="runBacktest" :disabled="running || batchRunning || loadingBacktestSettings || !mt5Symbols.length || !form.fromDate || !form.toDate">
+          <button @click="runBacktest" :disabled="running || batchRunning || portfolioBacktesting || loadingBacktestSettings || !mt5Symbols.length || !form.fromDate || !form.toDate">
             {{ running ? 'Running…' : 'Run in MT5' }}
           </button>
-          <button class="secondary" @click="runBatch" :disabled="running || batchRunning || loadingBacktestSettings || !mt5Symbols.length || !strategies.length || !form.symbol">
+          <button class="secondary" @click="runBatch" :disabled="running || batchRunning || portfolioBacktesting || loadingBacktestSettings || !mt5Symbols.length || !strategies.length || !form.symbol">
             {{ batchRunning ? 'Running batch…' : 'Run all strategies' }}
           </button>
         </div>
@@ -528,72 +528,9 @@
             </tbody>
           </table>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button @click="runPortfolioBacktest" :disabled="portfolioBacktesting || !portfolioSelectedStrategies.length">
+            <button @click="runPortfolioBacktest" :disabled="portfolioBacktesting || running || batchRunning || !portfolioSelectedStrategies.length">
               {{ portfolioBacktesting ? 'Backtesting Portfolio…' : 'Backtest Selected Strategies (' + portfolioSelectedStrategies.length + ')' }}
             </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Portfolio progress -->
-      <div class="card" v-if="portfolioRunning || portfolioResults.length">
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <h3>{{ portfolioRunning ? 'Portfolio Progress' : 'Portfolio Results' }}</h3>
-          <button v-if="portfolioRunning" class="secondary" style="padding:4px 10px;color:var(--danger);" @click="abortPortfolio" :disabled="!portfolioPortfolioKey">Abort</button>
-        </div>
-        <div v-if="portfolioRunning" style="font-size:12px;margin-bottom:4px;">
-          {{ portfolioPortfolioCompleted }} of {{ portfolioPortfolioTotal }} completed
-        </div>
-        <div v-if="portfolioRunning" class="batch-progress-bar">
-          <div class="batch-progress-fill" :style="{width: (portfolioPortfolioTotal ? (portfolioPortfolioCompleted / portfolioPortfolioTotal * 100) : 0) + '%'}"></div>
-        </div>
-        <div v-if="portfolioRunning && portfolioErrorMessage" class="error-box">{{ portfolioErrorMessage }}</div>
-        <div v-if="portfolioResults.length" style="margin-top:8px;">
-          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
-            {{ portfolioResults.filter(r => r.status === 'done').length }} succeeded,
-            {{ portfolioResults.filter(r => r.status === 'error').length }} failed.
-          </div>
-          <table class="compare">
-            <thead>
-              <tr><th style="text-align:left;padding-left:12px;">Strategy</th><th>Status</th><th>SQX Profit</th><th>MT5 Profit</th><th>Diff</th><th>DD %</th><th># Trades</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="(r, idx) in portfolioResults" :key="r.strategyName" class="batch-row" :class="{'batch-row-selected': portfolioSelectedIdx === idx}" @click="selectPortfolioResult(idx)">
-                <td style="text-align:left;font-weight:600;padding-left:8px;">{{ r.strategyName }}</td>
-                <td>
-                  <span v-if="r.status === 'done'" style="color:var(--success);">✓ Done</span>
-                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">… Running</span>
-                  <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
-                  <span v-else style="color:var(--danger);" :title="r.error">✗ Error</span>
-                </td>
-                <td v-if="r.status === 'done'">{{ formatBatchVal(r.sqxStats?.NetProfit) }}</td><td v-else>—</td>
-                <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.NetProfit) }}</td><td v-else>—</td>
-                <td v-if="r.status === 'done' && r.sqxStats?.NetProfit && r.mt5Stats?.NetProfit" :class="batchDiffClass(r.sqxStats.NetProfit, r.mt5Stats.NetProfit)">{{ batchDiffPct(r.sqxStats.NetProfit, r.mt5Stats.NetProfit) }}</td><td v-else>—</td>
-                <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.PctDrawdown, true) }}</td><td v-else>—</td>
-                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? '—' }}</td><td v-else>—</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div v-if="portfolioSelectedIdx !== null && portfolioResults[portfolioSelectedIdx]?.status === 'done'" class="batch-detail">
-          <table class="compare">
-            <thead><tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr></thead>
-            <tbody>
-              <tr v-for="row in (portfolioResults[portfolioSelectedIdx]?.comparison || [])" :key="row.key">
-                <td>{{ row.label }}</td><td>{{ row.sqxDisplay }}</td><td>{{ row.mt5Display }}</td><td :class="row.diffClass">{{ row.diffDisplay }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div style="margin-top:12px;">
-            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Equity curves — same scale, directly comparable.</div>
-            <div v-if="portfolioEquityLoading[portfolioSelectedIdx]" style="font-size:12px;color:var(--text-muted);">Loading…</div>
-            <div v-else-if="portfolioEquityError(portfolioSelectedIdx)" class="error-box">{{ portfolioEquityError(portfolioSelectedIdx) }}</div>
-            <div v-else class="equity-charts">
-              <div class="equity-chart"><div class="equity-title">SQX</div><canvas :id="'port-equity-sqx-' + portfolioSelectedIdx" height="150"></div>
-              <div class="equity-chart"><div class="equity-title">MT5</div><canvas :id="'port-equity-mt5-' + portfolioSelectedIdx" height="150"></canvas>
-                <div class="equity-note">{{ portfolioEquityNote(portfolioSelectedIdx, 'mt5') }}</div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -750,6 +687,20 @@
           </div>
         </div>
 
+        <!-- Portfolio Progress - shown in Results card while a portfolio backtest runs -->
+        <div v-if="portfolioRunning" style="margin-bottom:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div style="font-size:12px;">
+              Running: {{ portfolioPortfolioCompleted }} of {{ portfolioPortfolioTotal }} completed
+            </div>
+            <button class="secondary" style="padding:4px 10px;color:var(--danger);" @click="abortPortfolio" :disabled="!portfolioPortfolioKey">Abort</button>
+          </div>
+          <div class="batch-progress-bar" style="margin-top:4px;">
+            <div class="batch-progress-fill" :style="{width: (portfolioPortfolioTotal ? (portfolioPortfolioCompleted / portfolioPortfolioTotal * 100) : 0) + '%'}"></div>
+          </div>
+          <div v-if="portfolioErrorMessage" class="error-box" style="margin-top:6px;">{{ portfolioErrorMessage }}</div>
+        </div>
+
         <!-- Results Table - Portfolio Mode -->
         <div v-else-if="portfolioResults.length">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
@@ -758,10 +709,9 @@
             Click a row to see SQX vs MT5 comparison.
           </div>
           <table class="compare" style="font-size:11px;">
-            <thead><tr><th style="text-align:left;padding-left:12px;"></th><th>Strategy</th><th>Status</th><th>SQX Profit</th><th>MT5 Profit</th><th>Diff</th><th>DD%</th><th>Trades</th></tr></thead>
+            <thead><tr><th style="text-align:left;padding-left:12px;">Strategy</th><th>Status</th><th>SQX Profit</th><th>MT5 Profit</th><th>Diff</th><th>DD%</th><th>Trades</th></tr></thead>
             <tbody>
               <tr v-for="(r, idx) in portfolioResults" :key="r.strategyName" class="batch-row" :class="{'batch-row-selected': portfolioSelectedIdx === idx}" @click="selectPortfolioResult(idx)">
-                <td style="text-align:center;padding-left:12px;"><input type="checkbox" :value="idx" v-model="portfolioSelectedStrategies" :disabled="r.status !== 'done'"></td>
                 <td style="text-align:left;font-weight:600;padding-left:8px;">{{ r.strategyName }}</td>
                 <td>
                   <span v-if="r.status === 'done'" style="color:var(--success);">&check; Done</span>
@@ -1149,6 +1099,17 @@ createApp({
       portfolioResults.value = [];
       portfolioErrorMessage.value = '';
       portfolioSelectedIdx.value = null;
+      portfolioPortfolioCompleted.value = 0;
+      portfolioPortfolioTotal.value = 0;
+      // Unified view: a portfolio run replaces single-mode results
+      comparison.value = [];
+      phase.value = 'idle';
+      clearSingleEquity();
+      resultsAggregate.value = null;
+      // ...and start from clean per-strategy equity (indices repeat across runs)
+      portfolioEquity.value = {};
+      portfolioEquityLoading.value = {};
+      portfolioEquityErrors.value = {};
       if (_portfolioPollTimer) { clearInterval(_portfolioPollTimer); _portfolioPollTimer = null; }
       try {
         const body = {
@@ -1199,7 +1160,8 @@ createApp({
                   if (job.error) existing.error = job.error;
                 }
               }
-              const allDone = portfolioResults.value.every(r => r.status === 'done' || r.status === 'error' || r.status === 'aborted');
+              const allDone = portfolioResults.value.length > 0 &&
+                portfolioResults.value.every(r => r.status === 'done' || r.status === 'error' || r.status === 'aborted');
               if (allDone) {
                 clearInterval(_portfolioPollTimer);
                 _portfolioPollTimer = null;
@@ -1380,7 +1342,7 @@ createApp({
       if (refreshingSymbols.value) return;
       refreshingSymbols.value = true;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
+      const timer = setTimeout(() => controller.abort(), 45000); // MT5 cold-start can take ~20s
       try {
         const res = await fetch(BRIDGE_URL + '/mt5-symbols/live', { signal: controller.signal });
         const r = await res.json();
@@ -1504,6 +1466,13 @@ createApp({
       if (!form.fromDate || !form.toDate) return;
       errorMessage.value = ''; comparison.value = [];
       clearSingleEquity();
+      // Unified view: a single run replaces portfolio-mode results
+      portfolioResults.value = [];
+      portfolioSelectedIdx.value = null;
+      portfolioEquity.value = {};
+      portfolioEquityLoading.value = {};
+      portfolioEquityErrors.value = {};
+      resultsAggregate.value = null;
       const project = selectedProject.value;
       const databank = selectedDatabank.value;
       const strategyName = selectedStrategyName.value;
