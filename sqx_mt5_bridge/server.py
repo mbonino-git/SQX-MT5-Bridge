@@ -264,6 +264,22 @@ def _clear_jobs_db() -> None:
     conn.close()
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Callback: log exceptions from background tasks (asyncio.create_task swallows them)."""
+    exc = task.exception()
+    if exc:
+        msg = f"Background task failed: {type(exc).__name__}: {exc}"
+        import traceback
+        msg += f"\n{traceback.format_exc()}"
+        print(f"[PORTFOLIO] {msg}", flush=True)
+        try:
+            log_path = Path(__file__).resolve().parent.parent / "backtest.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[PORTFOLIO] TASK FAILED: {msg}\n")
+        except Exception:
+            pass
+
+
 def _load_jobs() -> list[BacktestJob]:
     conn = _get_db()
     rows = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
@@ -770,10 +786,11 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
         bodies.append(bt_body)
 
     # Run compile + sequential backtests in background (non-blocking)
-    asyncio.create_task(_run_portfolio_backtest(
+    task = asyncio.create_task(_run_portfolio_backtest(
         portfolio_key, project, databank, portfolio,
         strategy_list, valid_strats, bodies, deposit,
     ))
+    task.add_done_callback(lambda t: _log_task_exception(t))
 
     return {
         "ok": True,
@@ -787,14 +804,20 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
 async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
                                    strategy_list, valid_strats, bodies, deposit):
     """Background task: compile all strategies then run backtests sequentially."""
+    import traceback as tb
+    print(f"[PORTFOLIO] >>> BACKGROUND TASK STARTED <<< portfolio={portfolio} strategies={len(bodies)}", flush=True)
     try:
+        print(f"[PORTFOLIO] >>> Starting compilation for {len(valid_strats)} strategies...", flush=True)
         # Auto-compile all strategies before launching backtests
-        compiled, failed = await compile_portfolio_strategies(
-            project, "Results", strategy_list, settings.terminal_path,
+        compiled, failed, ex5_paths = await compile_portfolio_strategies(
+            project, databank, strategy_list, settings.terminal_path,
         )
         print(f"[COMPILER] Portfolio {portfolio}: {len(compiled)} compiled, {len(failed)} failed")
         for f in failed:
             print(f"[COMPILER] Failed: {f['name']}: {f['error']}")
+
+        # Build lookup: strategy_name → compiled ex5_path
+        compiled_set = set(ex5_paths.keys())
 
         # Initialize in-memory tracking
         job_list = []
@@ -810,32 +833,81 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
             "started_at": time.time(),
         }
 
-        # Launch backtest jobs sequentially: wait for each to complete before the next
-        skipped = 0
-        for idx, (orig_strat, bt_body) in enumerate(zip(valid_strats, bodies)):
-            strat = orig_strat[1]
-            try:
-                # Create job in DB and start MT5 thread
-                job_id = _create_backtest_job(bt_body)
-                if isinstance(job_id, dict):
-                    skipped += 1
-                    job_list.append({
-                        "index": idx,
-                        "jobId": None,
-                        "strategy": strat["name"],
-                        "status": "failed",
-                        "error": job_id.get("error", "Unknown error"),
-                    })
-                    print(f"[PORTFOLIO] Job {idx+1}/{len(bodies)} failed to create: {job_id.get('error')}")
-                    continue
-
+        # Pre-populate job_list with ALL strategies (so client sees all N)
+        for idx, strat in enumerate(strategy_list):
+            strat_name = strat["name"]
+            if strat_name not in compiled_set:
+                # Mark failed strategies upfront
                 job_list.append({
                     "index": idx,
-                    "jobId": job_id,
-                    "strategy": strat["name"],
-                    "status": "testing",
+                    "jobId": None,
+                    "strategy": strat_name,
+                    "status": "failed",
+                    "error": "Failed to compile (no EX5, no source in SQX)",
                 })
-                print(f"[PORTFOLIO] Created job {idx+1}/{len(bodies)}: {strat['name']} (job_id={job_id})")
+                print(f"[PORTFOLIO] PRE-SKIPPED {idx+1}/{len(bodies)}: {strat_name}")
+            else:
+                # Mark compiled strategies as pending
+                job_list.append({
+                    "index": idx,
+                    "jobId": None,
+                    "strategy": strat_name,
+                    "status": "pending",
+                })
+
+        # Launch backtest jobs sequentially: wait for each to complete before the next
+        skipped = 0
+        print(f"[PORTFOLIO] Sequential loop starting: {len(valid_strats)} valid strategies, {len(compiled_set)} compiled", flush=True)
+        for idx, (orig_strat, bt_body) in enumerate(zip(valid_strats, bodies)):
+            # orig_strat[0] = original index in strategy_list
+            orig_idx = orig_strat[0]
+            strat = orig_strat[1]
+            strat_name = strat["name"]
+            
+            print(f"[PORTFOLIO] Loop iteration {idx}: orig_idx={orig_idx} name={strat_name}", flush=True)
+            # orig_strat[0] = original index in strategy_list
+            orig_idx = orig_strat[0]
+            strat = orig_strat[1]
+            strat_name = strat["name"]
+            
+            # Mark this job as "testing" (update pre-populated entry)
+            if orig_idx < len(job_list):
+                job_list[orig_idx]["status"] = "testing"
+                job_list[orig_idx]["jobId"] = None  # Will be set after _create_backtest_job
+            
+            # Skip strategies that weren't compiled — mark as failed
+            if strat_name not in compiled_set:
+                if orig_idx < len(job_list):
+                    job_list[orig_idx]["status"] = "failed"
+                    if "error" not in job_list[orig_idx]:
+                        job_list[orig_idx]["error"] = "Failed to compile (no EX5, no source in SQX)"
+                print(f"[PORTFOLIO] Skipping {orig_idx+1}/{len(strategy_list)}: {strat_name} (NOT in compiled_set={compiled_set})", flush=True)
+                continue
+            
+            # Set the compiled EX5 path so _create_backtest_job uses it
+            if strat_name in ex5_paths:
+                bt_body["ex5Path"] = ex5_paths[strat_name]
+                bt_body["expertRelativePath"] = f"SQXBridge\\{Path(ex5_paths[strat_name]).name}"
+                print(f"[PORTFOLIO] ex5Path set: {Path(ex5_paths[strat_name]).name}", flush=True)
+            else:
+                print(f"[PORTFOLIO] WARNING: {strat_name} NOT in ex5_paths!", flush=True)
+
+            try:
+                # Create job in DB and start MT5 thread
+                print(f"[PORTFOLIO] About to call _create_backtest_job for {strat_name}", flush=True)
+                job_id = _create_backtest_job(bt_body)
+                print(f"[PORTFOLIO] _create_backtest_job returned: {type(job_id).__name__} for {strat_name}", flush=True)
+                if isinstance(job_id, dict):
+                    skipped += 1
+                    job_list[orig_idx]["status"] = "failed"
+                    job_list[orig_idx]["error"] = job_id.get("error", "Unknown error")
+                    print(f"[PORTFOLIO] Job {orig_idx+1}/{len(strategy_list)} failed to create: {job_id.get('error')}")
+                    continue
+
+                # Update pre-populated entry with job_id
+                job_list[orig_idx]["jobId"] = job_id
+                job_list[orig_idx]["status"] = "testing"
+                print(f"[PORTFOLIO] Created job {orig_idx+1}/{len(strategy_list)}: {strat['name']} (job_id={job_id})")
 
                 # Wait for this job to complete before launching the next
                 max_wait = 3600  # 1 hour max per job
@@ -844,7 +916,7 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
                 while elapsed < max_wait:
                     conn = _get_db()
                     row = conn.execute(
-                        "SELECT status, result, error FROM jobs WHERE id = ?", (job_id,)
+                        "SELECT status FROM jobs WHERE id = ?", (job_id,)
                     ).fetchone()
                     conn.close()
                     if not row:
@@ -855,29 +927,51 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
                     await asyncio.sleep(poll_interval)
                     elapsed += poll_interval
                     if elapsed % 120 == 0:
-                        print(f"[PORTFOLIO] Waiting for job {idx+1}... ({elapsed}s, status={status})")
+                        print(f"[PORTFOLIO] Waiting for job {orig_idx+1}... ({elapsed}s, status={status})", flush=True)
 
-                print(f"[PORTFOLIO] Job {idx+1} ({strat['name']}): completed with status={status}")
+                print(f"[PORTFOLIO] Job {orig_idx+1} ({strat['name']}): completed with status={status}", flush=True)
+                job_list[orig_idx]["status"] = status
+                if status == "error":
+                    conn = _get_db()
+                    err_row = conn.execute(
+                        "SELECT error FROM jobs WHERE id = ?", (job_id,)
+                    ).fetchone()
+                    conn.close()
+                    if err_row and err_row[0]:
+                        job_list[orig_idx]["error"] = err_row[0]
 
                 # Update completed count
                 _portfolio_backtest_jobs[portfolio_key]["completed"] = sum(
                     1 for j in job_list if j["status"] in ("done", "error")
                 )
+                print(f"[PORTFOLIO] Updated completed count: {_portfolio_backtest_jobs[portfolio_key]['completed']}/{len(job_list)}", flush=True)
 
             except Exception as e:
-                skipped += 1
-                job_list.append({
-                    "index": idx,
-                    "jobId": None,
-                    "strategy": strat["name"],
-                    "status": "failed",
-                    "error": str(e),
-                })
+                job_list[orig_idx]["status"] = "failed"
+                job_list[orig_idx]["error"] = str(e)
+                print(f"[PORTFOLIO] Job {orig_idx+1} ({strat['name']}): exception: {e}")
+            print(f"[PORTFOLIO] End of loop iteration {idx}, moving to next", flush=True)
 
         print(f"[PORTFOLIO] Portfolio {portfolio}: all {len(job_list)} jobs done ({skipped} skipped)")
 
     except Exception as e:
-        print(f"[PORTFOLIO] Portfolio {portfolio} background task failed: {e}")
+        # Log ALL failures so they're never invisible
+        import traceback
+        error_msg = f"Background task failed: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        print(f"[PORTFOLIO] {error_msg}", flush=True)
+        try:
+            log_path = Path(__file__).resolve().parent.parent / "backtest.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[PORTFOLIO] TASK FAILED: {error_msg}\n")
+        except Exception:
+            pass
+        # Update in-memory tracking if present
+        info = _portfolio_backtest_jobs.get(portfolio_key)
+        if info:
+            for j in info.get("jobs", []):
+                if j.get("status") == "testing":
+                    j["status"] = "error"
+                    j["error"] = str(e)
 
 
 
@@ -914,19 +1008,22 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
         conn = _get_db()
         placeholders = ",".join(["?"] * len(strategy_names))
         rows = conn.execute(
-            f"SELECT id, strategy_name, status, result, error FROM jobs WHERE strategy_name IN ({placeholders})",
+            f"SELECT id, strategy_name, status, error FROM jobs WHERE strategy_name IN ({placeholders})",
             strategy_names,
         ).fetchall()
         conn.close()
 
         jobs = []
         for row in rows:
-            jobs.append({
+            job_entry = {
                 "jobId": row[0],
                 "strategy": row[1],
                 "status": row[2],
                 "project": project,
-            })
+            }
+            if row[3]:
+                job_entry["error"] = row[3]
+            jobs.append(job_entry)
 
         if not jobs:
             return {"ok": False, "error": "No jobs found for portfolio strategies"}
@@ -961,16 +1058,25 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
 
         for j in job_info["jobs"]:
             if j.get("jobId"):
+                # Only fetch status first to avoid reading large JSON blobs
                 status_row = conn.execute(
-                    "SELECT status, result, error FROM jobs WHERE id = ?", (j["jobId"],)
+                    "SELECT status FROM jobs WHERE id = ?", (j["jobId"],)
                 ).fetchone()
                 if status_row:
                     j["status"] = status_row[0]
-                    if status_row[1]:
-                        try:
-                            j["result"] = json.loads(status_row[1])
-                        except Exception:
-                            pass
+                # Fetch result/error separately only for completed jobs
+                if j["status"] in ("done", "error"):
+                    detail_row = conn.execute(
+                        "SELECT result, error FROM jobs WHERE id = ?", (j["jobId"],)
+                    ).fetchone()
+                    if detail_row:
+                        if detail_row[0]:
+                            try:
+                                j["result"] = json.loads(detail_row[0])
+                            except Exception:
+                                pass
+                        if detail_row[1]:
+                            j["error"] = detail_row[1]
     conn.close()
 
     return {
@@ -1340,10 +1446,9 @@ def get_results(
         conn = _get_db()
         placeholders = ",".join(["?"] * len(strategy_names))
         rows = conn.execute(
-            f"SELECT id, strategy_name, status, result, error FROM jobs WHERE strategy_name IN ({placeholders})",
+            f"SELECT id, strategy_name, status, error FROM jobs WHERE strategy_name IN ({placeholders})",
             strategy_names,
         ).fetchall()
-        conn.close()
 
         jobs = []
         for row in rows:
@@ -1355,11 +1460,8 @@ def get_results(
             }
             if row[2]:
                 job_entry["status"] = row[2]
-                if row[3]:
-                    try:
-                        job_entry["result"] = json.loads(row[3])
-                    except Exception:
-                        pass
+            if row[3]:
+                job_entry["error"] = row[3]
             jobs.append(job_entry)
 
         if not jobs:
@@ -1383,6 +1485,22 @@ def get_results(
             "completed": completed,
             "deposit": deposit,
         }
+
+        # Now fetch result details for completed jobs (avoiding large blob in main query)
+        for j in jobs:
+            if j.get("status") in ("done", "error"):
+                detail_row = conn.execute(
+                    "SELECT result, error FROM jobs WHERE id = ?", (j["jobId"],)
+                ).fetchone()
+                if detail_row:
+                    if detail_row[0]:
+                        try:
+                            j["result"] = json.loads(detail_row[0])
+                        except Exception:
+                            pass
+                    if detail_row[1] and "error" not in j:
+                        j["error"] = detail_row[1]
+        conn.close()
         _portfolio_backtest_jobs[portfolio_key] = job_info
 
     # Reload from DB to get latest results
@@ -1390,15 +1508,23 @@ def get_results(
     for j in job_info["jobs"]:
         if j.get("jobId"):
             status_row = conn.execute(
-                "SELECT status, result, error FROM jobs WHERE id = ?", (j["jobId"],)
+                "SELECT status FROM jobs WHERE id = ?", (j["jobId"],)
             ).fetchone()
             if status_row:
                 j["status"] = status_row[0]
-                if status_row[1]:
-                    try:
-                        j["result"] = json.loads(status_row[1])
-                    except Exception:
-                        pass
+                # Only fetch result/error for completed jobs
+                if status_row[0] in ("done", "error"):
+                    detail = conn.execute(
+                        "SELECT result, error FROM jobs WHERE id = ?", (j["jobId"],)
+                    ).fetchone()
+                    if detail:
+                        if detail[0]:
+                            try:
+                                j["result"] = json.loads(detail[0])
+                            except Exception:
+                                pass
+                        if detail[1]:
+                            j["error"] = detail[1]
     conn.close()
 
     # Collect completed strategies
@@ -1749,10 +1875,19 @@ def _canonicalize_backtest_params(project: str, databank: str, strategy_name: st
     Used by the /backtest endpoint to override wrong form values (e.g. plugin
     sending XAUUSD/H1 for a NAS100/M30 strategy).
     """
+    # Normalize: replace spaces with underscores so SQX can find the strategy
+    safe_name = re.sub(r'\s+', '_', strategy_name).replace("\\", "_").replace("/", "_").strip()
+    
     raw_xml = sqx_client.get_strategy_settings(
-        project=project, databank=databank, strategy_name=strategy_name,
+        project=project, databank=databank, strategy_name=safe_name,
         sqx_host=settings.sqx_host, sqx_port=None,
     )
+    if raw_xml is None:
+        # Try original name as fallback
+        raw_xml = sqx_client.get_strategy_settings(
+            project=project, databank=databank, strategy_name=strategy_name,
+            sqx_host=settings.sqx_host, sqx_port=None,
+        )
     if raw_xml is None:
         return {}
     parsed = sqx_client.parse_backtest_settings(raw_xml)
@@ -1800,23 +1935,33 @@ def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
     mq5_file = data_dir / f"{safe_name}.mq5"
     ex5_file = mq5_file.with_suffix(".ex5")
 
-    # CACHE CHECK: If .ex5 exists and is newer than .mq5, skip compilation
-    if ex5_file.exists() and mq5_file.exists():
-        try:
-            ex5_mtime = ex5_file.stat().st_mtime
-            mq5_mtime = mq5_file.stat().st_mtime
-            if ex5_mtime >= mq5_mtime - 1:  # within 1s tolerance
-                return True, str(ex5_file), ""
-        except OSError:
-            pass
+    # CACHE CHECK: If EX5 exists, use it directly.
+    if not ex5_file.exists():
+        # Strategy naming mismatch: search for ANY matching EX5 in SQXBridge dir
+        # Take everything before the last numeric ID segment (e.g. "P0005-XAUUSD-H1-_EOD-XU_H1_" prefix)
+        prefix_match = re.match(r"^(.+?_\d+)$", safe_name)
+        if prefix_match:
+            prefix = prefix_match.group(1)
+            for f in data_dir.glob(f"{prefix}_*.ex5"):
+                ex5_file = f
+                break
+        # Also try: just match by strategy short name (P0005-...)
+        short_prefix = safe_name.split("_")[0] + "_"
+        if not ex5_file.exists():
+            for f in data_dir.glob(f"{short_prefix}*.ex5"):
+                ex5_file = f
+                break
 
-    # Get real MQ5 source code from SQX
+    if ex5_file.exists():
+        return True, str(ex5_file), ""
+
+    # Get real MQ5 source code from SQX — use safe_name to handle spaces in strategy name
     mq5_source = sqx_client.get_source_code(
-        project=project, databank=databank, strategy_name=strategy_name,
+        project=project, databank=databank, strategy_name=safe_name,
         sqx_host=settings.sqx_host, sqx_port=None,
     )
     if not mq5_source:
-        return False, "", f"Failed to get MQ5 source from SQX for '{strategy_name}'"
+        return False, "", f"Failed to get MQ5 source from SQX for '{safe_name}'"
 
     # Write MQ5 to Experts/SQXBridge/
     mq5_file.write_text(mq5_source, encoding="utf-8")
@@ -1865,16 +2010,17 @@ async def compile_portfolio_strategies(
     databank: str,
     strategy_list: list[dict],
     terminal_path: str,
-) -> tuple[list[str], list[dict]]:
+) -> tuple[list[str], list[dict], dict[str, str]]:
     """Compile all strategies in a portfolio before backtesting.
 
     Calls compile_expert_for_strategy concurrently for each strategy.
     Compilation failures for one strategy do not block others.
 
     Returns:
-        (compiled_names, failures) where compiled_names is a list of
-        strategy names that compiled successfully, and failures is a
-        list of {"name": str, "error": str} dicts for strategies that failed.
+        (compiled_names, failures, ex5_paths) where compiled_names is a list
+        of strategy names that compiled successfully, failures is a list of
+        {"name": str, "error": str} dicts, and ex5_paths maps strategy name
+        to the .ex5 file path on disk.
     """
     names = [s["name"] for s in strategy_list if "error" not in s and s.get("name")]
 
@@ -1893,22 +2039,36 @@ async def compile_portfolio_strategies(
 
     compiled: list[str] = []
     failed: list[dict] = []
+    ex5_paths: dict[str, str] = {}  # name -> ex5_path for compiled strategies
 
-    for name, result in zip(names, results):
+    for result in results:
         if isinstance(result, Exception):
-            err_msg = str(result)
-            failed.append({"name": name, "error": err_msg})
-            print(f"[COMPILER] {name}: failed: {err_msg}")
-        elif result is None:
-            compiled.append(name)
-            print(f"[COMPILER] {name}: compiled OK")
+            failed.append({"name": "unknown", "error": str(result)})
+            print(f"[COMPILER] unknown: failed: {result}")
+        elif isinstance(result, tuple) and len(result) == 2:
+            name, exc = result
+            if exc is None:
+                compiled.append(name)
+                # Find the ex5 path — re-compute it from strategy name
+                safe_name = re.sub(r'\s+', '_', name).replace("\\", "_").replace("/", "_").strip()
+                ex5_file = Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge" / f"{safe_name}.ex5"
+                if not ex5_file.exists():
+                    short_prefix = safe_name.split("_")[0] + "_"
+                    for f in (Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge").glob(f'{short_prefix}*.ex5'):
+                        ex5_file = f
+                        break
+                ex5_paths[name] = str(ex5_file)
+                print(f"[COMPILER] {name}: compiled OK -> {ex5_file.name}")
+            else:
+                failed.append({"name": name, "error": str(exc)})
+                print(f"[COMPILER] {name}: failed: {exc}")
         else:
             # Should not happen but handle defensively
             err_msg = f"Unexpected result type: {type(result)}"
-            failed.append({"name": name, "error": err_msg})
-            print(f"[COMPILER] {name}: failed: {err_msg}")
+            failed.append({"name": "unknown", "error": err_msg})
+            print(f"[COMPILER] unknown: failed: {err_msg}")
 
-    return compiled, failed
+    return compiled, failed, ex5_paths
 
 
 @app.post("/compile")
@@ -2223,7 +2383,10 @@ async def _run_backtest_job(job: BacktestJob):
     """
     import subprocess
     import time
+    import traceback
+    from pathlib import Path
 
+    print(f"[BACKTEST] _run_backtest_job START for {job.job_id} ({job.strategy_name})", flush=True)
     job.status = "testing"
     _save_job(job)
 
@@ -2256,11 +2419,44 @@ async def _run_backtest_job(job: BacktestJob):
     model_num = _TICK_MODEL_MAP.get(job.tick_model, 2)
     forward_mode = 1 if job.forward_mode else 0
 
-    expert_path = (job.expert_relative_path or f"SQXBridge\\{safe_name}").replace("/", "\\")
-
     # Apply symbol mapping (e.g. NAS100 -> US100.cash) so MT5 recognizes the
     # instrument. Without this MT5 exits immediately with 0xC450001A.
     test_symbol = _resolve_mt5_symbol(job.symbol)
+
+    # ── Write INI to Experts directory (BotPulse pattern) ──
+    # MT5 Tester reads INI from: {data_dir}\MQL5\Experts\SQXBridge\{jobId}.ini
+    experts_dir = mt5_data_dir / "MQL5" / "Experts" / "SQXBridge"
+    experts_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Find the actual EX5 file BEFORE building the INI ──
+    # This must happen before expert_path so we use the real filename
+    safe_name = re.sub(r'\s+', '_', job.strategy_name).replace("\\", "_").replace("/", "_").strip()
+    ex5_file = experts_dir / f"{safe_name}.ex5"
+    if not ex5_file.exists():
+        # Fallback: search for EX5 with similar prefix (handles naming mismatches)
+        short_prefix = safe_name.split('_')[0] + '_'
+        for f in experts_dir.glob(f'{short_prefix}*.ex5'):
+            ex5_file = f
+            break
+    if not ex5_file.exists():
+        # Also try job.expert_relative_path's filename
+        if job.ex5_path:
+            ej = Path(job.ex5_path)
+            if ej.exists():
+                ex5_file = ej
+    if not ex5_file.exists():
+        error_msg = f"Expert binary not found for {safe_name}. Strategy may need to be compiled first."
+        print(f"[BACKTEST] ERROR: {error_msg}", flush=True)
+        job.status = "error"
+        job.error = error_msg
+        _save_job(job)
+        return  # Don't launch MT5 without expert
+    else:
+        safe_name = ex5_file.stem
+        print(f"[BACKTEST] Expert resolved: {ex5_file.name}", flush=True)
+
+    # Now build expert_path using the ACTUAL EX5 filename
+    expert_path = (job.expert_relative_path or f"SQXBridge\\{safe_name}").replace("/", "\\")
 
     ini_lines = [
         "[Tester]",
@@ -2283,19 +2479,6 @@ async def _run_backtest_job(job: BacktestJob):
         "InpsqDisplayInfoPanel=false",
         "ShutdownTerminal=1",
     ]
-
-    # Write INI to Experts directory (BotPulse pattern)
-    # MT5 Tester reads INI from: {data_dir}\MQL5\Experts\SQXBridge\{jobId}.ini
-    experts_dir = mt5_data_dir / "MQL5" / "Experts" / "SQXBridge"
-    experts_dir.mkdir(parents=True, exist_ok=True)
-
-    # Verify Expert .ex5 file exists; MT5 won't run without it
-    safe_name = re.sub(r'\s+', '_', job.strategy_name).replace("\\", "_").replace("/", "_").strip()
-    ex5_file = experts_dir / f"{safe_name}.ex5"
-    if not ex5_file.exists():
-        print(f"[BACKTEST] Expert not found: {ex5_file}. "
-              f"Strategy may need to be compiled first via /compile endpoint.",
-              flush=True)
 
     ini_path = experts_dir / f"{job_id}.ini"
 
@@ -2859,7 +3042,29 @@ def _create_backtest_job(body: dict[str, Any]) -> str | dict:
             loop.close()
 
     loop = asyncio.new_event_loop()
-    threading.Thread(target=_run_job_in_thread, args=(loop, job), daemon=True).start()
+    def _run_job_in_thread_safe(loop, job):
+        """Thread wrapper with error handling."""
+        print(f"[BACKTEST] THREAD START for job {job.job_id} ({job.strategy_name})", flush=True)
+        try:
+            _run_job_in_thread(loop, job)
+        except Exception as e:
+            print(f"[BACKTEST] Thread died for job {job.job_id}: {e}", flush=True)
+            import traceback
+            import time
+            try:
+                log_path = Path(__file__).resolve().parent.parent / "backtest.log"
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[BACKTEST] Thread died: {e}\n{traceback.format_exc()}\n")
+            except Exception:
+                pass
+            try:
+                job.status = "error"
+                job.error = str(e)
+                _save_job(job)
+            except Exception:
+                pass
+    
+    threading.Thread(target=_run_job_in_thread_safe, args=(loop, job), daemon=True).start()
 
     return job_id
 
@@ -2903,8 +3108,9 @@ async def get_backtest_status(job_id: str):
             "SELECT status, result, error FROM jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
-    finally:
-        conn.close()
+    except Exception as e:
+        return {"status": "error", "error": f"DB error: {e}"}
+    conn.close()
 
     if not row:
         return {"status": "error", "error": "Job not found"}
