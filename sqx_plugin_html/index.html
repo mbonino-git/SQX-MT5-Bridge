@@ -1,10 +1,12 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" data-theme="light">
 
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SQX-MT5 Backtest Bridge</title>
+<!-- CACHE-BUST v4 -->
+<!-- v3-dates-fix -->
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
@@ -286,8 +288,8 @@
   <div style="display:flex;align-items:center;justify-content:space-between;">
     <h2>SQX-MT5 Backtest Bridge</h2>
     <div style="display:flex;gap:8px;align-items:center;">
-      <button class="secondary" style="padding:4px 10px;" @click="toggleInstances" title="Configure MT5 instances">⚙ Instances</button>
-      <button class="secondary" style="padding:4px 10px;" @click="toggleSettings" title="Bridge settings">⚙ Settings</button>
+      <button class="secondary" style="padding:4px 10px;" @click="toggleInstances" title="Configure MT5 instances">âš™ Instances</button>
+      <button class="secondary" style="padding:4px 10px;" @click="toggleSettings" title="Bridge settings">âš™ Settings</button>
     </div>
   </div>
 
@@ -321,7 +323,7 @@
     <div style="display:flex;gap:8px;margin-top:8px;">
       <button class="secondary btn-sm" @click="addInstance">+ Add instance</button>
       <button class="secondary btn-sm" @click="refreshInstances" :disabled="checkingInstances">
-        {{ checkingInstances ? 'Checking…' : 'Check status' }}
+        {{ checkingInstances ? 'Checkingâ€¦' : 'Check status' }}
       </button>
     </div>
   </div>
@@ -344,13 +346,13 @@
       </div>
     </div>
     <div class="row">
-      <button @click="saveSettings" :disabled="savingSettings">{{ savingSettings ? 'Saving…' : 'Save' }}</button>
+      <button @click="saveSettings" :disabled="savingSettings">{{ savingSettings ? 'Savingâ€¦' : 'Save' }}</button>
     </div>
     <div v-if="settingsMessage" style="font-size:12px;color:var(--success);">{{ settingsMessage }}</div>
   </div>
 
   <div v-if="bridgeStatus !== 'online'" class="banner offline">
-    <div v-if="bridgeStatus === 'checking'">Connecting to SQX-MT5 Bridge…</div>
+    <div v-if="bridgeStatus === 'checking'">Connecting to SQX-MT5 Bridgeâ€¦</div>
     <div v-else>
       Could not connect to the bridge at <code>{{ bridgeUrl }}</code>.
       Make sure the service is running and press retry.
@@ -368,7 +370,7 @@
           <div class="field">
             <label>Custom project</label>
             <select v-model="selectedProject" :disabled="loadingProjects">
-              <option disabled value="">{{ loadingProjects ? 'Loading…' : 'Choose a project' }}</option>
+              <option disabled value="">{{ loadingProjects ? 'Loadingâ€¦' : 'Choose a project' }}</option>
               <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
             </select>
           </div>
@@ -377,14 +379,14 @@
           <div class="field">
             <label>Databank</label>
             <select v-model="selectedDatabank" :disabled="loadingDatabanks">
-              <option disabled value="">{{ loadingDatabanks ? 'Loading…' : 'Choose a databank' }}</option>
+              <option disabled value="">{{ loadingDatabanks ? 'Loadingâ€¦' : 'Choose a databank' }}</option>
               <option v-for="d in databanks" :key="d.name" :value="d.name">{{ d.name }} ({{ d.records }})</option>
             </select>
           </div>
           <div class="field">
             <label>Saved strategy</label>
             <select v-model="selectedStrategyName" :disabled="loadingStrategies || !strategies.length">
-              <option disabled value="">{{ loadingStrategies ? 'Loading…' : (strategies.length ? 'Choose a strategy' : 'This databank is empty') }}</option>
+              <option disabled value="">{{ loadingStrategies ? 'Loadingâ€¦' : (strategies.length ? 'Choose a strategy' : 'This databank is empty') }}</option>
               <option v-for="s in strategies" :key="s.name" :value="s.name">{{ s.name }}</option>
             </select>
           </div>
@@ -405,7 +407,7 @@
               <input v-else type="text" v-model="form.symbol" placeholder="EURUSD" style="flex:1;">
               <button type="button" class="secondary" @click="refreshSymbols" :disabled="refreshingSymbols"
                       style="white-space:nowrap;" title="Load symbol list from MT5 broker">
-                {{ refreshingSymbols ? 'Connecting…' : 'Refresh symbols' }}
+                {{ refreshingSymbols ? 'Connectingâ€¦' : 'Refresh symbols' }}
               </button>
             </div>
             <span v-if="mt5Symbols.length" style="font-size:10px;color:var(--text-muted);">
@@ -447,7 +449,7 @@
         <div class="row">
           <div class="field">
             <label>Initial deposit (same as in SQX)</label>
-            <div class="settings-box">{{ loadingBacktestSettings ? 'Loading…' : (form.deposit ? form.deposit.toLocaleString() : '—') }}</div>
+            <div class="settings-box">{{ loadingBacktestSettings ? 'Loadingâ€¦' : (form.deposit ? form.deposit.toLocaleString() : 'â€”') }}</div>
           </div>
           <div class="field">
             <label>Currency</label>
@@ -461,10 +463,10 @@
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button @click="runBacktest" :disabled="running || batchRunning || portfolioBacktesting || loadingBacktestSettings || (!mt5Symbols.length && !form.symbol) || !form.fromDate || !form.toDate">
-            {{ running ? 'Running…' : 'Run in MT5' }}
+            {{ running ? 'Runningâ€¦' : 'Run in MT5' }}
           </button>
           <button class="secondary" @click="runBatch" :disabled="running || batchRunning || portfolioBacktesting || loadingBacktestSettings || (!mt5Symbols.length && !strategies.length) || !form.symbol">
-            {{ batchRunning ? 'Running batch…' : 'Run all strategies' }}
+            {{ batchRunning ? 'Running batchâ€¦' : 'Run all strategies' }}
           </button>
         </div>
       </div>
@@ -490,13 +492,13 @@
           <div class="field">
             <label>Portfolio file</label>
             <select v-model="selectedPortfolio" :disabled="loadingPortfolios">
-              <option disabled value="">{{ loadingPortfolios ? 'Loading…' : 'Choose a portfolio' }}</option>
+              <option disabled value="">{{ loadingPortfolios ? 'Loadingâ€¦' : 'Choose a portfolio' }}</option>
               <option v-for="pf in portfolios" :key="pf" :value="pf">{{ pf }}</option>
             </select>
           </div>
           <div style="display:flex;align-items:flex-end;">
             <button type="button" class="secondary" @click="loadPortfolio" :disabled="loadingPortfolioStrategies || !portfolioProject || !portfolioDatabank || !selectedPortfolio" style="white-space:nowrap;">
-              {{ loadingPortfolioStrategies ? 'Loading…' : 'Load Portfolio' }}
+              {{ loadingPortfolioStrategies ? 'Loadingâ€¦' : 'Load Portfolio' }}
             </button>
           </div>
         </div>
@@ -530,7 +532,7 @@
             <div class="row">
               <div class="field">
                 <label>Initial deposit (same as in SQX)</label>
-                <div class="settings-box">{{ portfolioInitialCapital ? portfolioInitialCapital.toLocaleString() : '—' }}</div>
+                <div class="settings-box">{{ portfolioInitialCapital ? portfolioInitialCapital.toLocaleString() : 'â€”' }}</div>
               </div>
               <div class="field">
                 <label>Currency</label>
@@ -543,8 +545,8 @@
             </div>
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
-            {{ portfolioStrategies.length }} strategies found · {{ portfolioFromLabel }}
-            <span v-if="portfolioInitialCapital"> · Initial capital: {{ portfolioInitialCapital.toLocaleString() }}</span>
+            {{ portfolioStrategies.length }} strategies found Â· {{ portfolioFromLabel }}
+            <span v-if="portfolioInitialCapital"> Â· Initial capital: {{ portfolioInitialCapital.toLocaleString() }}</span>
           </div>
           <table class="compare" style="font-size:11px;margin-bottom:10px;">
             <thead>
@@ -556,15 +558,15 @@
                   <input type="checkbox" :value="idx" v-model="portfolioSelectedStrategies" :disabled="s.error">
                 </td>
                 <td style="text-align:left;font-weight:600;padding-left:8px;">{{ s.name }}</td>
-                <td style="font-size:11px;">{{ s.symbol || (s.error ? s.error : '—') }}</td>
-                <td style="font-size:11px;">{{ s.timeframe || '—' }}</td>
-                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' → ' + s.to_date.replace('.', '-')) : '—' }}</td>
+                <td style="font-size:11px;">{{ s.symbol || (s.error ? s.error : 'â€”') }}</td>
+                <td style="font-size:11px;">{{ s.timeframe || 'â€”' }}</td>
+                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' â†’ ' + s.to_date.replace('.', '-')) : 'â€”' }}</td>
               </tr>
             </tbody>
           </table>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button @click="runPortfolioBacktest" :disabled="portfolioBacktesting || running || batchRunning || !portfolioSelectedStrategies.length">
-              {{ portfolioBacktesting ? 'Backtesting Portfolio…' : 'Backtest Selected Strategies (' + portfolioSelectedStrategies.length + ')' }}
+              {{ portfolioBacktesting ? 'Backtesting Portfolioâ€¦' : 'Backtest Selected Strategies (' + portfolioSelectedStrategies.length + ')' }}
             </button>
           </div>
         </div>
@@ -620,26 +622,26 @@
                   :class="{'batch-row-selected': selectedBatchIdx === idx}"
                   @click="selectBatchResult(idx)">
                 <td style="text-align:left;font-weight:600;">{{ r.strategyName }}</td>
-                <td style="font-size:11px;color:var(--text-muted);">{{ r.instance || '—' }}</td>
+                <td style="font-size:11px;color:var(--text-muted);">{{ r.instance || 'â€”' }}</td>
                 <td v-if="r.status === 'done'">{{ formatBatchVal(r.sqxStats?.NetProfit) }}</td>
-                <td v-else>—</td>
+                <td v-else>â€”</td>
                 <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.NetProfit) }}</td>
-                <td v-else>—</td>
+                <td v-else>â€”</td>
                 <td v-if="r.status === 'done' && r.sqxStats?.NetProfit && r.mt5Stats?.NetProfit"
                     :class="batchDiffClass(r.sqxStats.NetProfit, r.mt5Stats.NetProfit)">
                   {{ batchDiffPct(r.sqxStats.NetProfit, r.mt5Stats.NetProfit) }}
                 </td>
-                <td v-else-if="r.status === 'done'">—</td>
-                <td v-else>—</td>
+                <td v-else-if="r.status === 'done'">â€”</td>
+                <td v-else>â€”</td>
                 <td v-if="r.status === 'done'">{{ formatBatchVal(r.mt5Stats?.PctDrawdown, true) }}</td>
-                <td v-else>—</td>
-                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? '—' }}</td>
-                <td v-else>—</td>
+                <td v-else>â€”</td>
+                <td v-if="r.status === 'done'">{{ r.mt5Stats?.NumberOfTrades ?? 'â€”' }}</td>
+                <td v-else>â€”</td>
                 <td>
-                  <span v-if="r.status === 'done'" style="color:var(--success);">✓ Done</span>
-                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">… Running</span>
+                  <span v-if="r.status === 'done'" style="color:var(--success);">âœ“ Done</span>
+                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">â€¦ Running</span>
                   <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
-                  <span v-else style="color:var(--danger);" :title="r.error">✗ Error</span>
+                  <span v-else style="color:var(--danger);" :title="r.error">âœ— Error</span>
                 </td>
               </tr>
             </tbody>
@@ -661,9 +663,9 @@
           </table>
           <div style="margin-top:12px;">
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
-              Equity curves — same scale, directly comparable.
+              Equity curves â€” same scale, directly comparable.
             </div>
-            <div v-if="batchEquityLoading[selectedBatchIdx]" style="font-size:12px;color:var(--text-muted);">Loading…</div>
+            <div v-if="batchEquityLoading[selectedBatchIdx]" style="font-size:12px;color:var(--text-muted);">Loadingâ€¦</div>
             <div v-else-if="batchEquityError(selectedBatchIdx)" class="error-box">{{ batchEquityError(selectedBatchIdx) }}</div>
             <div v-else class="equity-charts">
               <div class="equity-chart">
@@ -857,7 +859,7 @@
 <script>
 const { createApp, ref, reactive, onMounted, computed, watch, nextTick } = Vue;
 
-// ── Bridge URL ─────────────────────────────────────────────────────
+// â”€â”€ Bridge URL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const BRIDGE_URL = 'http://localhost:8090';
 
 const STATS_LABELS = {
@@ -876,7 +878,7 @@ createApp({
     const bridgeStatus = ref('checking');
     const bridgeUrl = ref(BRIDGE_URL);
 
-    // ── Activity Log ────────────────────────────────────────────────
+    // â”€â”€ Activity Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const LOG_MAX = 500;
     const logEntries = ref([]);
     const logFilter = ref('all');
@@ -911,7 +913,7 @@ createApp({
     }
     function logTimeSince(startMs) { return ((Date.now() - startMs) / 1000).toFixed(1) + 's'; }
 
-    // ── Strategy cascade ────────────────────────────────────────────
+    // â”€â”€ Strategy cascade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const projects = ref([]);
     const loadingProjects = ref(false);
     const selectedProject = ref('');
@@ -928,7 +930,7 @@ createApp({
       const res = await fetch(BRIDGE_URL + path);
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      logInfo('api', 'GET ' + path + ' → OK (' + logTimeSince(startMs) + ')');
+      logInfo('api', 'GET ' + path + ' â†’ OK (' + logTimeSince(startMs) + ')');
       return body;
     }
     async function apiPost(path, payload) {
@@ -940,7 +942,7 @@ createApp({
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      logInfo('api', 'POST ' + path + ' → OK (' + logTimeSince(startMs) + ')');
+      logInfo('api', 'POST ' + path + ' â†’ OK (' + logTimeSince(startMs) + ')');
       return body;
     }
 
@@ -949,7 +951,7 @@ createApp({
       try {
         const r = await apiGet('/projects');
         const raw = r.projects || [];
-        // SQX may return a count (purely numeric) as the first element — filter it out
+        // SQX may return a count (purely numeric) as the first element â€” filter it out
         projects.value = raw.filter(p => typeof p === 'string' && !/^\d+$/.test(p));
         if (!selectedProject.value) selectedProject.value = projects.value[0] || '';
       } catch (e) { errorMessage.value = 'Could not load projects: ' + e.message; }
@@ -1012,7 +1014,7 @@ createApp({
       finally { loadingStrategies.value = false; }
     }
 
-    // ── Portfolio ───────────────────────────────────────────────────
+    // â”€â”€ Portfolio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const portfolios = ref([]);
     const loadingPortfolios = ref(false);
     const portfolioProject = ref('');
@@ -1034,7 +1036,7 @@ createApp({
     const portfolioSelectedIdx = ref(null);
     const portfolioEquityLoading = ref({});
     const portfolioEquityErrors = ref({});
-    // ── Unified Results ────────────────────────────────────────────
+    // â”€â”€ Unified Results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const resultsAggregate = ref(null);
     const resultsAggregateLoading = ref(false);
     const _POLICY_POLL_MS = 30000;
@@ -1116,10 +1118,10 @@ createApp({
           .map((s, i) => s.error ? -1 : i)
           .filter(i => i >= 0);
         if (r.fromDate && r.toDate) {
-          portfolioFromLabel.value = r.fromDate.replaceAll('.', '-') + ' → ' + r.toDate.replaceAll('.', '-');
+          portfolioFromLabel.value = r.fromDate.replaceAll('.', '-') + ' â†’ ' + r.toDate.replaceAll('.', '-');
           portfolioFromDate.value = r.fromDate.replaceAll('.', '-');
           portfolioToDate.value = r.toDate.replaceAll('.', '-');
-          console.log('[loadPortfolio] dates set: ' + portfolioFromDate.value + ' → ' + portfolioToDate.value);
+          console.log('[loadPortfolio] dates set: ' + portfolioFromDate.value + ' â†’ ' + portfolioToDate.value);
         } else {
           portfolioFromLabel.value = '';
         }
@@ -1330,7 +1332,7 @@ createApp({
       if (!d) return null;
       const hasAny = ['sqx', 'mt5'].some(k => d[k] && d[k].points && d[k].points.length);
       if (hasAny) return null;
-      return 'No equity data: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' · ');
+      return 'No equity data: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' Â· ');
     }
     function portfolioEquityNote(idx, side) {
       const d = portfolioEquity.value['port-' + idx];
@@ -1338,11 +1340,11 @@ createApp({
       if (!which) return 'No data';
       if (!which.points || !which.points.length) return which.error || 'No data';
       const pts = which.points;
-      return fmtMoney(pts[0][1]) + ' → ' + fmtMoney(pts[pts.length - 1][1])
-        + ' · ' + (pts.length - 1) + ' trades';
+      return fmtMoney(pts[0][1]) + ' â†’ ' + fmtMoney(pts[pts.length - 1][1])
+        + ' Â· ' + (pts.length - 1) + ' trades';
     }
 
-    // ── Settings auto-fill ──────────────────────────────────────────
+    // â”€â”€ Settings auto-fill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const loadingBacktestSettings = ref(false);
     const backtestSettingsError = ref('');
     const form = reactive({
@@ -1392,7 +1394,7 @@ createApp({
       if (newVal !== oldVal) loadBacktestSettings();
     }, { immediate: true });
 
-    // ── Symbols ─────────────────────────────────────────────────────
+    // â”€â”€ Symbols â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const mt5Symbols = ref([]);
     const refreshingSymbols = ref(false);
     const periods = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1', 'MN1'];
@@ -1428,7 +1430,7 @@ createApp({
       }
     }
 
-    // ── Bridge check ────────────────────────────────────────────────
+    // â”€â”€ Bridge check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async function checkBridge() {
       bridgeStatus.value = 'checking';
       try {
@@ -1443,7 +1445,7 @@ createApp({
       }
     }
 
-    // ── Theme sync via postMessage (from SQX) ──────────────────────
+    // â”€â”€ Theme sync via postMessage (from SQX) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     function handleMessage(e) {
       const { type, theme } = e.data || {};
       if (type === 'SET_THEME') {
@@ -1458,7 +1460,7 @@ createApp({
       }
     }
 
-    // ── Backtest run ────────────────────────────────────────────────
+    // â”€â”€ Backtest run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const phase = ref('idle');
     const running = computed(() => ['export', 'compile', 'test', 'compare'].includes(phase.value));
     const errorMessage = ref('');
@@ -1477,10 +1479,10 @@ createApp({
     }
     function stepIcon(step) {
       const c = stepClass(step);
-      if (c === 'done') return '✓';
-      if (c === 'active') return '…';
-      if (c === 'error') return '✗';
-      return '·';
+      if (c === 'done') return 'âœ“';
+      if (c === 'active') return 'â€¦';
+      if (c === 'error') return 'âœ—';
+      return 'Â·';
     }
 
     function normalizeStatValue(key, value) {
@@ -1493,8 +1495,8 @@ createApp({
       // Round to avoid floating-point display artifacts (e.g. 2063.14990234375)
       if (typeof sqxVal === 'number' && !Number.isInteger(sqxVal)) sqxVal = Math.round(sqxVal * 100) / 100;
       if (typeof mt5Val === 'number' && !Number.isInteger(mt5Val)) mt5Val = Math.round(mt5Val * 100) / 100;
-      const fmt = (v) => (v == null || Number.isNaN(v) ? '—' : (isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })));
-      let diffDisplay = '—', diffClass = '';
+      const fmt = (v) => (v == null || Number.isNaN(v) ? 'â€”' : (isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })));
+      let diffDisplay = 'â€”', diffClass = '';
       if (sqxVal != null && mt5Val != null && sqxVal !== 0) {
         const pct = Math.abs((mt5Val - sqxVal) / sqxVal) * 100;
         diffDisplay = (mt5Val >= sqxVal ? '+' : '') + ((mt5Val - sqxVal) / sqxVal * 100).toFixed(1) + '%';
@@ -1609,7 +1611,7 @@ createApp({
       }
     }
 
-    // ── Equity curves ───────────────────────────────────────────────
+    // â”€â”€ Equity curves â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const batchEquity = ref({});
     const batchEquityLoading = ref({});
     const equityDrawState = {};
@@ -1647,12 +1649,12 @@ createApp({
       if (!d) return '';
       const hasAny = ['sqx', 'mt5'].some(k => d[k] && d[k].points && d[k].points.length);
       if (hasAny) return '';
-      return 'No equity data to chart: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' · ');
+      return 'No equity data to chart: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' Â· ');
     }
 
     function fmtMoney(v) {
       const n = Number(v);
-      if (!Number.isFinite(n)) return '—';
+      if (!Number.isFinite(n)) return 'â€”';
       return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
     }
 
@@ -1662,8 +1664,8 @@ createApp({
       if (!side) return 'No data';
       if (!side.points || !side.points.length) return side.error || 'No data';
       const pts = side.points;
-      return fmtMoney(pts[0][1]) + ' → ' + fmtMoney(pts[pts.length - 1][1])
-        + ' · ' + (pts.length - 1) + ' trades';
+      return fmtMoney(pts[0][1]) + ' â†’ ' + fmtMoney(pts[pts.length - 1][1])
+        + ' Â· ' + (pts.length - 1) + ' trades';
     }
 
     function drawBatchEquity(idx) {
@@ -1744,7 +1746,7 @@ createApp({
       ctx.fillStyle = color + '26'; ctx.fill();
     }
 
-    // ── Batch mode ──────────────────────────────────────────────────
+    // â”€â”€ Batch mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const batchRunning = ref(false);
     const batchResults = ref([]);
     const batchTotal = ref(0);
@@ -1763,13 +1765,13 @@ createApp({
     }
 
     function formatBatchVal(v, isPct) {
-      if (v == null || Number.isNaN(v)) return '—';
+      if (v == null || Number.isNaN(v)) return 'â€”';
       // Round to avoid floating-point artifacts
       const n = typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 100) / 100 : v;
       return isPct ? n.toFixed(2) + '%' : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
     function batchDiffPct(sqxVal, mt5Val) {
-      if (!sqxVal || !mt5Val) return '—';
+      if (!sqxVal || !mt5Val) return 'â€”';
       return ((mt5Val - sqxVal) / Math.abs(sqxVal) * 100 >= 0 ? '+' : '') + ((mt5Val - sqxVal) / Math.abs(sqxVal) * 100).toFixed(1) + '%';
     }
     function batchDiffClass(sqxVal, mt5Val) {
@@ -1887,7 +1889,7 @@ createApp({
       }
     }
 
-    // ── MT5 Instances ───────────────────────────────────────────────
+    // â”€â”€ MT5 Instances â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const INSTANCES_KEY = 'mt5b_instances';
     const defaultInstances = [
       { enabled: true, terminalPath: '' },
@@ -1938,7 +1940,7 @@ createApp({
       return instances.value.filter(i => i.enabled !== false && i.terminalPath);
     }
 
-    // ── UI toggles ──────────────────────────────────────────────────
+    // â”€â”€ UI toggles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const showInstances = ref(false);
     const showSettings = ref(false);
     const settingsForm = reactive({
@@ -1980,7 +1982,7 @@ createApp({
       }
     }
 
-    // ── Mount ───────────────────────────────────────────────────────
+    // â”€â”€ Mount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     onMounted(async () => {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
