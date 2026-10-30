@@ -80,7 +80,7 @@
   .field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 120px; }
   .field.checkbox { flex-direction: row; align-items: center; gap: 6px; }
 
-  select, input[type=text], input[type=number] {
+  select, input[type=text], input[type=number], input[type=date] {
     background: var(--bg-body);
     color: var(--text-main);
     border: 1px solid var(--border-color);
@@ -1348,7 +1348,7 @@ createApp({
     const portfolioLeverage = ref(100);
 
     async function loadBacktestSettings() {
-      form.fromDate = ''; form.toDate = ''; form.deposit = null;
+      form.fromDate = ''; form.toDate = ''; form.symbol = ''; form.deposit = null;
       if (!selectedProject.value || !selectedDatabank.value || !selectedStrategyName.value) return;
       loadingBacktestSettings.value = true;
       backtestSettingsError.value = '';
@@ -1362,7 +1362,7 @@ createApp({
           form.fromDate = typeof r.fromDate === 'string' ? r.fromDate.replaceAll('.', '-') : '';
           form.toDate = typeof r.toDate === 'string' ? r.toDate.replaceAll('.', '-') : '';
           form.deposit = r.initialCapital || null;
-          if (r.symbol && !form.symbol) form.symbol = r.symbol;
+          if (r.symbol) form.symbol = r.symbol;
         } else {
           backtestSettingsError.value = 'Could not load settings: ' + (r.error || 'Unknown');
         }
