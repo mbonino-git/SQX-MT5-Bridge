@@ -1457,7 +1457,7 @@ createApp({
 
     async function pollBacktest(jobId) {
       while (true) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 30000));
         const job = await apiGet('/backtest/' + jobId + '/status');
         if (job.status === 'done') return job.result;
         if (job.status === 'error') throw new Error(job.error || 'The backtest failed in MT5.');
