@@ -23,12 +23,12 @@
 **Interfaces:**
 - Produces: FastAPI app that starts on port 8080
 
-- [ ] Step 1: Create bridge_service directory structure
-- [ ] Step 2: Create requirements.txt with fastapi, uvicorn, httpx, pydantic
-- [ ] Step 3: Create config.py with settings class
-- [ ] Step 4: Create server.py with FastAPI app and health endpoint
-- [ ] Step 5: Test server starts and responds to /health
-- [ ] Step 6: Commit
+- [x] Step 1: Create bridge_service directory structure
+- [x] Step 2: Create requirements.txt with fastapi, uvicorn, httpx, pydantic
+- [x] Step 3: Create config.py with settings class
+- [x] Step 4: Create server.py with FastAPI app and health endpoint
+- [x] Step 5: Test server starts and responds to /health
+- [x] Step 6: Commit
 
 ---
 
