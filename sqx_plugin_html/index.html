@@ -521,7 +521,7 @@
                 <select v-model="portfolioTickModel">
                   <option value="every_tick_real">Every tick (recommended)</option>
                   <option value="every_tick">Every tick (generated)</option>
-                  <option value="ohlc_1min" selected>1 minute OHLC</option>
+                  <option value="ohlc_1min">1 minute OHLC</option>
                   <option value="open_prices">Open prices only</option>
                   <option value="math_calculations">Math calculations</option>
                 </select>
@@ -1116,9 +1116,9 @@ createApp({
           .map((s, i) => s.error ? -1 : i)
           .filter(i => i >= 0);
         if (r.fromDate && r.toDate) {
-          portfolioFromLabel.value = r.fromDate.replace('.', '-') + ' → ' + r.toDate.replace('.', '-');
-          portfolioFromDate.value = r.fromDate.replace('.', '-');
-          portfolioToDate.value = r.toDate.replace('.', '-');
+          portfolioFromLabel.value = r.fromDate.replaceAll('.', '-') + ' → ' + r.toDate.replaceAll('.', '-');
+          portfolioFromDate.value = r.fromDate.replaceAll('.', '-');
+          portfolioToDate.value = r.toDate.replaceAll('.', '-');
           console.log('[loadPortfolio] dates set: ' + portfolioFromDate.value + ' → ' + portfolioToDate.value);
         } else {
           portfolioFromLabel.value = '';
