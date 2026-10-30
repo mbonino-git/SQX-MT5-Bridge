@@ -256,6 +256,14 @@ def _save_job(job: BacktestJob):
     conn.close()
 
 
+def _clear_jobs_db() -> None:
+    """Clear all jobs from the DB. Called before starting a new portfolio backtest."""
+    conn = _get_db()
+    conn.execute("DELETE FROM jobs")
+    conn.commit()
+    conn.close()
+
+
 def _load_jobs() -> list[BacktestJob]:
     conn = _get_db()
     rows = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
@@ -671,13 +679,13 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
             "symbol": "...", "period": "M30",
             "fromDate": "2022-01-01", "toDate": "2026-10-16",
             "deposit": 10000, "currency": "USD", "leverage": 100,
-            "tickModel": "every_tick_real"
+            "tickModel": "every_tick_real",
+            "strategyIndices": [0, 1, 2]  -- optional: filter to specific strategies
         }
 
     Returns: { "portfolioKey": "...", "jobs": [{ "index": 0, "jobId": "...", "strategy": "..." }] }
 
-    All SQX param lookups and backtest jobs run concurrently so the HTTP
-    response returns immediately after dispatching.
+    Jobs run sequentially in the order they appear in the portfolio file.
     """
     project = body.get("project", "")
     databank = body.get("databank", "")
@@ -689,8 +697,13 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
     currency = body.get("currency", "USD")
     leverage = body.get("leverage", 100)
     tick_model = body.get("tickModel", "every_tick_real")
+    strategy_indices = body.get("strategyIndices", None)
 
     portfolio_key = f"{project}__{databank}__{portfolio}"
+
+    # Clean up ALL old jobs before starting a new portfolio run
+    # (jobs are ephemeral; single backtest jobs are handled separately)
+    _clear_jobs_db()
 
     # Parse portfolio strategies
     strategies_resp = get_portfolio_strategies(project=project, databank=databank, portfolio=portfolio)
@@ -698,6 +711,12 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
         return {"ok": False, "error": strategies_resp.get("error", "Failed to parse portfolio")}
 
     strategy_list = strategies_resp["strategies"]
+
+    # Filter by strategyIndices if provided
+    if strategy_indices is not None:
+        strategy_list = [s for i, s in enumerate(strategy_list) if i in strategy_indices]
+        if not strategy_list:
+            return {"ok": True, "portfolioKey": portfolio_key, "jobs": [], "total": 0, "skipped": len(strategy_indices)}
 
     # Build backtest bodies and canonicalization tasks
     valid_strats = []
@@ -758,32 +777,9 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
     for f in failed:
         print(f"[COMPILER] Failed: {f['name']}: {f['error']}")
 
-    # Launch all backtest jobs concurrently
-    launch_tasks = [asyncio.to_thread(_create_backtest_job, b) for b in bodies]
-    launch_results = await asyncio.gather(*launch_tasks, return_exceptions=True)
-
-    # Collect results
+    # Initialize in-memory tracking BEFORE the sequential loop so
+    # portfolio-status can see it while we wait for jobs
     job_list = []
-    skipped = 0
-    for idx, (orig_strat, result) in enumerate(zip(valid_strats, launch_results)):
-        strat = orig_strat[1]
-        if isinstance(result, Exception) or not isinstance(result, str):
-            skipped += 1
-            job_list.append({
-                "index": orig_strat[0],
-                "jobId": None,
-                "strategy": strat["name"],
-                "status": "failed",
-                "error": str(result) if isinstance(result, Exception) else "Unknown error",
-            })
-        else:
-            job_list.append({
-                "index": orig_strat[0],
-                "jobId": result,
-                "strategy": strat["name"],
-                "status": "pending",
-            })
-
     _portfolio_backtest_jobs[portfolio_key] = {
         "project": project,
         "databank": databank,
@@ -795,6 +791,70 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
         "deposit": deposit,
         "started_at": time.time(),
     }
+
+    # Launch backtest jobs sequentially: wait for each to complete before launching the next
+    skipped = 0
+    for idx, (orig_strat, bt_body) in enumerate(zip(valid_strats, bodies)):
+        strat = orig_strat[1]
+        try:
+            # Create job in DB and start MT5 thread
+            job_id = _create_backtest_job(bt_body)
+            if isinstance(job_id, dict):
+                skipped += 1
+                job_list.append({
+                    "index": idx,
+                    "jobId": None,
+                    "strategy": strat["name"],
+                    "status": "failed",
+                    "error": job_id.get("error", "Unknown error"),
+                })
+                print(f"[PORTFOLIO] Job {idx+1}/{len(bodies)} failed to create: {job_id.get('error')}")
+                continue
+
+            job_list.append({
+                "index": idx,
+                "jobId": job_id,
+                "strategy": strat["name"],
+                "status": "testing",
+            })
+            print(f"[PORTFOLIO] Created job {idx+1}/{len(bodies)}: {strat['name']} (job_id={job_id})")
+
+            # Wait for this job to complete before launching the next
+            max_wait = 3600  # 1 hour max per job
+            elapsed = 0
+            poll_interval = 30
+            while elapsed < max_wait:
+                conn = _get_db()
+                row = conn.execute(
+                    "SELECT status, result, error FROM jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                conn.close()
+                if not row:
+                    break
+                status = row[0]
+                if status in ("done", "error"):
+                    break
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+                if elapsed % 120 == 0:
+                    print(f"[PORTFOLIO] Waiting for job {idx+1}... ({elapsed}s, status={status})")
+
+            print(f"[PORTFOLIO] Job {idx+1} ({strat['name']}): completed with status={status}")
+
+            # Update completed count in in-memory tracking
+            _portfolio_backtest_jobs[portfolio_key]["completed"] = sum(
+                1 for j in job_list if j["status"] in ("done", "error")
+            )
+
+        except Exception as e:
+            skipped += 1
+            job_list.append({
+                "index": idx,
+                "jobId": None,
+                "strategy": strat["name"],
+                "status": "failed",
+                "error": str(e),
+            })
 
     return {
         "ok": True,
@@ -810,46 +870,99 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
     """Get the status of a portfolio backtest job.
 
     Returns: { "ok": true, "portfolioKey": "...", "jobs": [...], "total": N, "completed": N, "progress": 0.0 }
+
+    Uses in-memory tracking for the current run. If lost (bridge restart),
+    reconstructs state from the DB by looking up all jobs for strategies in this portfolio.
     """
     job_info = _portfolio_backtest_jobs.get(portfolio_key)
+
     if not job_info:
-        return {"ok": False, "error": "Portfolio backtest not found"}
+        # Reconstruct from DB — handles bridge restarts
+        parts = portfolio_key.split("__")
+        if len(parts) < 3:
+            return {"ok": False, "error": "Invalid portfolio_key format"}
 
-    # Update completed count from DB
+        project = parts[0]
+        databank = parts[1]
+        portfolio_name = "__".join(parts[2:])  # handle portfolio names with "__"
+
+        strategies_resp = get_portfolio_strategies(project=project, databank=databank, portfolio=portfolio_name)
+        if not strategies_resp.get("ok"):
+            return {"ok": False, "error": strategies_resp.get("error", "Failed to parse portfolio")}
+
+        strategy_names = [s["name"] for s in strategies_resp.get("strategies", []) if not s.get("error")]
+        if not strategy_names:
+            return {"ok": False, "error": "No strategies in portfolio"}
+
+        conn = _get_db()
+        placeholders = ",".join(["?"] * len(strategy_names))
+        rows = conn.execute(
+            f"SELECT id, strategy_name, status, result, error FROM jobs WHERE strategy_name IN ({placeholders})",
+            strategy_names,
+        ).fetchall()
+        conn.close()
+
+        jobs = []
+        for row in rows:
+            jobs.append({
+                "jobId": row[0],
+                "strategy": row[1],
+                "status": row[2],
+                "project": project,
+            })
+
+        if not jobs:
+            return {"ok": False, "error": "No jobs found for portfolio strategies"}
+
+        completed = sum(1 for j in jobs if j["status"] in ("done", "error"))
+        deposit = strategies_resp.get("initialCapital", 10000) or 10000
+
+        # Save reconstructed state to in-memory dict
+        job_info = {
+            "project": project,
+            "databank": databank,
+            "portfolio": portfolio_name,
+            "strategies": strategies_resp.get("strategies", []),
+            "jobs": jobs,
+            "total": len(jobs),
+            "completed": completed,
+            "deposit": deposit,
+        }
+        _portfolio_backtest_jobs[portfolio_key] = job_info
+
+    # Update completed count from DB for jobs in the in-memory tracking
     conn = _get_db()
-    rows = conn.execute(
-        "SELECT status FROM jobs WHERE id IN (" + ",".join(["?"] * len(job_info["jobs"])) + ")",
-        [j["jobId"] for j in job_info["jobs"] if j.get("jobId")],
-    ).fetchall()
+    job_ids = [j["jobId"] for j in job_info["jobs"] if j.get("jobId")]
+    if job_ids:
+        placeholders = ",".join(["?"] * len(job_ids))
+        rows = conn.execute(
+            f"SELECT status FROM jobs WHERE id IN ({placeholders})",
+            job_ids,
+        ).fetchall()
+        completed = sum(1 for r in rows if r[0] in ("done", "error"))
+        job_info["completed"] = completed
 
-    completed = sum(1 for r in rows if r[0] in ("done", "error"))
-    job_info["completed"] = completed
-
-    for j in job_info["jobs"]:
-        j["project"] = job_info.get("project", "")
-        j["databank"] = "Results"
-        j["deposit"] = job_info.get("deposit", 10000)
-        if j.get("jobId"):
-            status_row = conn.execute(
-                "SELECT status, result, error FROM jobs WHERE id = ?", (j["jobId"],)
-            ).fetchone()
-            if status_row:
-                j["status"] = status_row[0]
-                if status_row[1]:
-                    try:
-                        j["result"] = json.loads(status_row[1])
-                    except Exception:
-                        pass
+        for j in job_info["jobs"]:
+            if j.get("jobId"):
+                status_row = conn.execute(
+                    "SELECT status, result, error FROM jobs WHERE id = ?", (j["jobId"],)
+                ).fetchone()
+                if status_row:
+                    j["status"] = status_row[0]
+                    if status_row[1]:
+                        try:
+                            j["result"] = json.loads(status_row[1])
+                        except Exception:
+                            pass
     conn.close()
-    _portfolio_backtest_jobs[portfolio_key] = job_info
 
     return {
         "ok": True,
         "portfolioKey": portfolio_key,
         "jobs": job_info["jobs"],
         "total": job_info["total"],
-        "completed": completed,
-        "progress": round(completed / max(job_info["total"], 1), 2),
+        "completed": job_info["completed"],
+        "progress": round(job_info["completed"] / max(job_info["total"], 1), 2),
     }
 
 
@@ -1190,7 +1303,70 @@ def get_results(
 
     job_info = _portfolio_backtest_jobs.get(portfolio_key)
     if not job_info:
-        return {"ok": False, "error": "Portfolio backtest not found"}
+        # Reconstruct from DB — handles bridge restarts
+        parts = portfolio_key.split("__")
+        if len(parts) < 3:
+            return {"ok": False, "error": "Invalid portfolio_key format"}
+
+        project = parts[0]
+        databank = parts[1]
+        portfolio_name = "__".join(parts[2:])
+
+        strategies_resp = get_portfolio_strategies(project=project, databank=databank, portfolio=portfolio_name)
+        if not strategies_resp.get("ok"):
+            return {"ok": False, "error": strategies_resp.get("error", "Failed to parse portfolio")}
+
+        strategy_names = [s["name"] for s in strategies_resp.get("strategies", []) if not s.get("error")]
+        if not strategy_names:
+            return {"ok": False, "error": "No strategies in portfolio"}
+
+        conn = _get_db()
+        placeholders = ",".join(["?"] * len(strategy_names))
+        rows = conn.execute(
+            f"SELECT id, strategy_name, status, result, error FROM jobs WHERE strategy_name IN ({placeholders})",
+            strategy_names,
+        ).fetchall()
+        conn.close()
+
+        jobs = []
+        for row in rows:
+            job_entry = {
+                "jobId": row[0],
+                "strategy": row[1],
+                "project": project,
+                "databank": "Results",
+            }
+            if row[2]:
+                job_entry["status"] = row[2]
+                if row[3]:
+                    try:
+                        job_entry["result"] = json.loads(row[3])
+                    except Exception:
+                        pass
+            jobs.append(job_entry)
+
+        if not jobs:
+            return {
+                "ok": True,
+                "mode": "portfolio",
+                "aggregate": {"stats": {}, "comparison": _build_comparison({}, {}), "completed": 0, "total": 0},
+                "equity": {"sqx": {}, "mt5": {}},
+            }
+
+        completed = sum(1 for j in jobs if j.get("status") == "done")
+        deposit = strategies_resp.get("initialCapital", 10000) or 10000
+
+        job_info = {
+            "project": project,
+            "databank": databank,
+            "portfolio": portfolio_name,
+            "strategies": strategies_resp.get("strategies", []),
+            "jobs": jobs,
+            "total": len(jobs),
+            "completed": completed,
+            "deposit": deposit,
+        }
+        _portfolio_backtest_jobs[portfolio_key] = job_info
 
     # Reload from DB to get latest results
     conn = _get_db()
@@ -2593,8 +2769,8 @@ def _create_backtest_job(body: dict[str, Any]) -> str | dict:
     """Create a backtest job and launch its background thread.
 
     Internal helper shared by /backtest and /portfolio/backtest.
-    Creates a fresh event loop for this thread, runs the async backtest
-    coroutine, and cleans up.
+    Synchronous: saves to DB first, then starts the MT5 thread.
+    Returns job_id on success, or error dict on failure.
     """
     strategy_name = body.get("strategyName", "")
     symbol = body.get("symbol", "EURUSD")
