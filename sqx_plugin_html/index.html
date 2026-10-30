@@ -1433,6 +1433,9 @@ createApp({
     function diffRow(key, label, sqxVal, mt5Val, isPct) {
       sqxVal = normalizeStatValue(key, sqxVal);
       mt5Val = normalizeStatValue(key, mt5Val);
+      // Round to avoid floating-point display artifacts (e.g. 2063.14990234375)
+      if (typeof sqxVal === 'number' && !Number.isInteger(sqxVal)) sqxVal = Math.round(sqxVal * 100) / 100;
+      if (typeof mt5Val === 'number' && !Number.isInteger(mt5Val)) mt5Val = Math.round(mt5Val * 100) / 100;
       const fmt = (v) => (v == null || Number.isNaN(v) ? '—' : (isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })));
       let diffDisplay = '—', diffClass = '';
       if (sqxVal != null && mt5Val != null && sqxVal !== 0) {
@@ -1702,7 +1705,9 @@ createApp({
 
     function formatBatchVal(v, isPct) {
       if (v == null || Number.isNaN(v)) return '—';
-      return isPct ? v.toFixed(2) + '%' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+      // Round to avoid floating-point artifacts
+      const n = typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 100) / 100 : v;
+      return isPct ? n.toFixed(2) + '%' : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
     function batchDiffPct(sqxVal, mt5Val) {
       if (!sqxVal || !mt5Val) return '—';

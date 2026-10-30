@@ -1059,6 +1059,13 @@ def _build_comparison(sqx_stats, mt5_stats):
         label = STATS_LABELS.get(key, key)
         sqx_val = _normalize_stat_value(key, sqx_stats.get(key))
         mt5_val = _normalize_stat_value(key, mt5_stats.get(key))
+        # Round floating-point stats to 2 decimals to avoid display artifacts
+        # (e.g. 2063.14990234375 from floating-point arithmetic)
+        if isinstance(sqx_val, float) and key not in ("NumberOfTrades", "MaxConsecWins", "MaxConsecLoss"):
+            sqx_val = round(sqx_val, 2)
+        if isinstance(mt5_val, float) and key not in ("NumberOfTrades", "MaxConsecWins", "MaxConsecLoss"):
+            mt5_val = round(mt5_val, 2)
+
         fmt = lambda v: ('—' if v is None or (isinstance(v, float) and (v != v or abs(v) == float('inf')))
                           else (f"{v:.2f}%" if key == "PctDrawdown" or key == "WinningPct"
                                 else f"{v:,}" if isinstance(v, (int, float)) else str(v)))
@@ -2350,6 +2357,14 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
                 net_profit = 0.0
                 profits = []
                 losses = []
+                equity_points = []
+                equity = float(job.deposit) if hasattr(job, 'deposit') else 10000.0
+                peak_equity = equity
+                max_drawdown = 0.0
+                max_consec_wins = 0
+                max_consec_loss = 0
+                consec_wins = 0
+                consec_loss = 0
                 in_deals = False
                 for line in txt.split('\n'):
                     if '- List of deals' in line:
@@ -2366,17 +2381,45 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
                         profit = float(parts[12]) if parts[12] else 0
                         total_trades += 1
                         net_profit += profit
+                        equity += profit
+                        if parts[5]:
+                            try:
+                                open_time = parts[5]
+                                equity_points.append({"index": total_trades, "equity": round(equity, 2)})
+                            except (ValueError, IndexError):
+                                pass
                         if profit > 0:
                             profits.append(profit)
+                            consec_wins += 1
+                            consec_loss = 0
+                            if consec_wins > max_consec_wins:
+                                max_consec_wins = consec_wins
                         elif profit < 0:
                             losses.append(abs(profit))
+                            consec_loss += 1
+                            consec_wins = 0
+                            if consec_loss > max_consec_loss:
+                                max_consec_loss = consec_loss
+                        if equity > peak_equity:
+                            peak_equity = equity
+                        dd = peak_equity - equity
+                        if dd > max_drawdown:
+                            max_drawdown = dd
                 if total_trades > 0:
+                    gross_profit = sum(profits)
+                    gross_loss = sum(losses)
+                    pf = gross_profit / gross_loss if gross_loss != 0 else (gross_profit if gross_profit > 0 else 0)
+                    winning_pct = sum(1 for p in profits if p > 0) / total_trades * 100 if total_trades > 0 else 0
                     mt5_stats = {
-                        "NetProfit": net_profit,
+                        "NetProfit": round(net_profit, 2),
                         "NumberOfTrades": total_trades,
+                        "ProfitFactor": round(pf, 2) if pf != 0 else None,
+                        "PctDrawdown": round(max_drawdown / peak_equity * 100, 2) if peak_equity > 0 else None,
+                        "WinningPct": round(winning_pct, 2),
                         "AvgLoss": round(sum(losses) / len(losses), 2) if losses else 0,
+                        "MaxConsecWins": max_consec_wins,
+                        "MaxConsecLoss": max_consec_loss,
                     }
-                    # Try to derive more stats from SQX if available
                     print(f"[BACKTEST] Derived stats from CSV: {mt5_stats}")
             except Exception as e:
                 print(f"[BACKTEST] Error deriving CSV stats: {e}")
