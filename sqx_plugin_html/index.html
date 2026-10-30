@@ -479,7 +479,7 @@
         <h3>2b. Portfolio Backtest</h3>
         <div class="row">
           <div class="field">
-            <label>Project (same as above)</label>
+            <label>Project</label>
             <select v-model="portfolioProject" :disabled="loadingProjects">
               <option disabled value="">Choose a project</option>
               <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
@@ -709,59 +709,124 @@
         </div>
       </div>
 
-      <!-- 5. Comparison -->
-      <div class="card" v-if="comparison.length">
-        <h3>4. SQX vs MT5</h3>
-        <table class="compare">
-          <thead>
-            <tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in comparison" :key="row.key">
-              <td>{{ row.label }}</td>
-              <td>{{ row.sqxDisplay }}</td>
-              <td>{{ row.mt5Display }}</td>
-              <td :class="row.diffClass">{{ row.diffDisplay }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div style="margin-top:12px;">
+      <!-- Unified Results Section -->
+      <div class="card" v-if="comparison.length || (portfolioResults.length && portfolioRunning) || (resultsAggregate && resultsAggregate.aggregate)">
+        <h3>Results</h3>
+
+        <!-- Results Table - Single Strategy Mode -->
+        <div v-if="comparison.length">
+          <table class="compare" style="font-size:11px;">
+            <thead><tr><th style="text-align:left;padding-left:12px;">Strategy</th><th>SQX Profit</th><th>MT5 Profit</th><th>Diff</th><th>DD%</th><th>Trades</th></tr></thead>
+            <tbody>
+              <tr>
+                <td style="text-align:left;font-weight:600;padding-left:8px;">{{ lastBacktestName }}</td>
+                <td v-if="comparison[0]">{{ formatBatchVal(comparison[0].sqxDisplay) }}</td><td v-else>-</td>
+                <td v-if="comparison[0]">{{ formatBatchVal(comparison[0].mt5Display) }}</td><td v-else>-</td>
+                <td v-if="comparison[0]">{{ comparison[0].diffDisplay }}</td><td v-else>-</td>
+                <td v-if="comparison[3]">{{ formatBatchVal(comparison[3].sqxDisplay || comparison[3].mt5Display) }}</td><td v-else>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Individual Strategy Detail - Single Mode -->
+        <div v-if="comparison.length" class="batch-detail">
+          <table class="compare">
+            <thead><tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr></thead>
+            <tbody>
+              <tr v-for="row in comparison" :key="row.key">
+                <td>{{ row.label }}</td><td>{{ row.sqxDisplay }}</td><td>{{ row.mt5Display }}</td><td :class="row.diffClass">{{ row.diffDisplay }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Equity curves - same scale, directly comparable.</div>
+            <div v-if="batchEquityLoading['single']" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+            <div v-else-if="batchEquityError('single')" class="error-box">{{ batchEquityError('single') }}</div>
+            <div v-else class="equity-charts">
+              <div class="equity-chart"><div class="equity-title">SQX</div><canvas id="equity-sqx-single" height="150"></canvas><div class="equity-note">{{ equityNote('single', 'sqx') }}</div></div>
+              <div class="equity-chart"><div class="equity-title">MT5</div><canvas id="equity-mt5-single" height="150"></canvas><div class="equity-note">{{ equityNote('single', 'mt5') }}</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Results Table - Portfolio Mode -->
+        <div v-else-if="portfolioResults.length">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
-            Equity curves — same scale, directly comparable.
+            {{ portfolioResults.filter(r => r.status === 'done').length }} succeeded,
+            {{ portfolioResults.filter(r => r.status === 'error').length }} failed.
+            Click a row to see SQX vs MT5 comparison.
           </div>
-          <div v-if="batchEquityLoading['single']" style="font-size:12px;color:var(--text-muted);">Loading…</div>
-          <div v-else-if="batchEquityError('single')" class="error-box">{{ batchEquityError('single') }}</div>
-          <div v-else class="equity-charts">
-            <div class="equity-chart">
-              <div class="equity-title">SQX</div>
-              <canvas id="equity-sqx-single" height="150"></canvas>
-              <div class="equity-note">{{ equityNote('single', 'sqx') }}</div>
-            </div>
-            <div class="equity-chart">
-              <div class="equity-title">MT5</div>
-              <canvas id="equity-mt5-single" height="150"></canvas>
-              <div class="equity-note">{{ equityNote('single', 'mt5') }}</div>
+          <table class="compare" style="font-size:11px;">
+            <thead><tr><th style="text-align:left;padding-left:12px;"></th><th>Strategy</th><th>Status</th><th>SQX Profit</th><th>MT5 Profit</th><th>Diff</th><th>DD%</th><th>Trades</th></tr></thead>
+            <tbody>
+              <tr v-for="(r, idx) in portfolioResults" :key="r.strategyName" class="batch-row" :class="{'batch-row-selected': portfolioSelectedIdx === idx}" @click="selectPortfolioResult(idx)">
+                <td style="text-align:center;padding-left:12px;"><input type="checkbox" :value="idx" v-model="portfolioSelectedStrategies" :disabled="r.status !== 'done'"></td>
+                <td style="text-align:left;font-weight:600;padding-left:8px;">{{ r.strategyName }}</td>
+                <td>
+                  <span v-if="r.status === 'done'" style="color:var(--success);">&check; Done</span>
+                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">&hellip; Running</span>
+                  <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
+                  <span v-else style="color:var(--danger);" :title="r.error">&cross; Error</span>
+                </td>
+                <td>{{ r.sqxStats?.NetProfit != null ? formatBatchVal(r.sqxStats.NetProfit) : '-' }}</td>
+                <td>{{ r.mt5Stats?.NetProfit != null ? formatBatchVal(r.mt5Stats.NetProfit) : '-' }}</td>
+                <td v-if="r.sqxStats?.NetProfit != null && r.mt5Stats?.NetProfit != null" :class="batchDiffClass(r.sqxStats.NetProfit, r.mt5Stats.NetProfit)">{{ batchDiffPct(r.sqxStats.NetProfit, r.mt5Stats.NetProfit) }}</td><td v-else>-</td>
+                <td v-if="r.mt5Stats?.PctDrawdown != null">{{ formatBatchVal(r.mt5Stats.PctDrawdown, true) }}</td><td v-else>-</td>
+                <td>{{ r.mt5Stats?.NumberOfTrades ?? '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Individual Strategy Detail - Portfolio Mode (click row to expand) -->
+        <div v-if="portfolioSelectedIdx !== null && portfolioResults[portfolioSelectedIdx]?.status === 'done'" class="batch-detail">
+          <table class="compare">
+            <thead><tr><th>Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr></thead>
+            <tbody>
+              <tr v-for="row in (portfolioResults[portfolioSelectedIdx]?.comparison || [])" :key="row.key">
+                <td>{{ row.label }}</td><td>{{ row.sqxDisplay }}</td><td>{{ row.mt5Display }}</td><td :class="row.diffClass">{{ row.diffDisplay }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Equity curves - same scale, directly comparable.</div>
+            <div v-if="portfolioEquityLoading['port-' + portfolioSelectedIdx]" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+            <div v-else-if="portfolioEquityError(portfolioSelectedIdx)" class="error-box">{{ portfolioEquityError(portfolioSelectedIdx) }}</div>
+            <div v-else class="equity-charts">
+              <div class="equity-chart"><div class="equity-title">SQX</div><canvas :id="'port-equity-sqx-' + portfolioSelectedIdx" height="150"></canvas><div class="equity-note">{{ portfolioEquityNote(portfolioSelectedIdx, 'sqx') }}</div></div>
+              <div class="equity-chart"><div class="equity-title">MT5</div><canvas :id="'port-equity-mt5-' + portfolioSelectedIdx" height="150"></canvas><div class="equity-note">{{ portfolioEquityNote(portfolioSelectedIdx, 'mt5') }}</div></div>
             </div>
           </div>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">
-          Differences &gt; 15% in red, 5–15% in amber. Normal for them not to match exactly: spread, slippage, tick modeling.
+
+        <!-- Aggregate Stats & Equity -->
+        <div v-if="resultsAggregate && resultsAggregate.aggregate" class="batch-detail" style="margin-top:16px;border-top:2px solid var(--primary);">
+          <h4 style="margin:0 0 8px 0;color:var(--primary);">
+            {{ resultsAggregate.mode === 'portfolio' ? 'Portfolio Aggregate' : 'Aggregate' }}
+            ({{ resultsAggregate.aggregate.completed }}/{{ resultsAggregate.aggregate.total }} completed)
+          </h4>
+          <table class="compare" style="font-size:11px;">
+            <thead><tr><th style="text-align:left;">Metric</th><th>SQX</th><th>MT5</th><th>Difference</th></tr></thead>
+            <tbody>
+              <tr v-for="row in resultsAggregate.aggregate.comparison" :key="row.key">
+                <td style="text-align:left;">{{ row.label }}</td><td>{{ row.sqxDisplay }}</td><td>{{ row.mt5Display }}</td><td :class="row.diffClass">{{ row.diffDisplay }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="resultsAggregate.equity && resultsAggregate.equity.sqx" style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+              {{ resultsAggregate.mode === 'portfolio' ? 'Combined equity - all strategies summed on a common trade axis.' : 'Single strategy equity curves.' }}
+            </div>
+            <div class="equity-charts">
+              <div class="equity-chart"><div class="equity-title">{{ resultsAggregate.mode === 'portfolio' ? 'SQX (Combined)' : 'SQX' }}</div><canvas id="results-aggregate-sqx" height="150"></canvas></div>
+              <div class="equity-chart"><div class="equity-title">{{ resultsAggregate.mode === 'portfolio' ? 'MT5 (Combined)' : 'MT5' }}</div><canvas id="results-aggregate-mt5" height="150"></canvas></div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- 6. Done -->
-      <div class="card" v-if="phase === 'done'">
-        <h3>✓ Backtest Complete</h3>
-        <div style="font-size:12px;color:var(--success);">
-          {{ lastBacktestName }}
-        </div>
-      </div>
-
-    </div>
-  </template>
-
-  <!-- Activity Log -->
-  <div class="log-panel">
+<div class="log-panel">
     <div class="log-header" @click="logExpanded = !logExpanded">
       <div style="display:flex;align-items:center;gap:6px;">
         <span class="log-header-title">Activity Log</span>
@@ -904,32 +969,37 @@ createApp({
       finally { loadingProjects.value = false; }
     }
 
+    async function syncDatabanksForProject(projectName) {
+      if (!projectName) return;
+      try {
+        const r = await apiGet('/databanks?project=' + encodeURIComponent(projectName));
+        databanks.value = r.databanks || [];
+        // Default to "Results" databank if available, else first one
+        const resultsDb = databanks.value.find(d => d.name === 'Results');
+        selectedDatabank.value = (resultsDb || databanks.value[0] || {}).name || '';
+        if (selectedDatabank.value) {
+          await loadStrategies();
+        }
+        // Default portfolio databank to first available (portfolios may live in a databank with 0 strategy records)
+        if (databanks.value.length) {
+          const defaultDb = databanks.value[0].name;
+          if (defaultDb !== portfolioDatabank.value) {
+            portfolioDatabank.value = defaultDb;
+            await loadPortfolios();
+          }
+        }
+      } catch (e) { errorMessage.value = 'Could not load databanks: ' + e.message; }
+      finally { loadingDatabanks.value = false; }
+    }
+
     watch(selectedProject, async (newVal, oldVal) => {
       if (newVal && newVal !== oldVal) {
-        portfolioProject.value = newVal;  // Sync for portfolio auto-select
+        portfolioProject.value = newVal;
         databanks.value = []; selectedDatabank.value = '';
         strategies.value = []; selectedStrategyName.value = '';
         form.symbol = ''; comparison.value = []; phase.value = 'idle';
         loadingDatabanks.value = true;
-        try {
-          const r = await apiGet('/databanks?project=' + encodeURIComponent(newVal));
-          databanks.value = r.databanks || [];
-          // Default to "Results" databank if available, else first one
-          const resultsDb = databanks.value.find(d => d.name === 'Results');
-          selectedDatabank.value = (resultsDb || databanks.value[0] || {}).name || '';
-          if (selectedDatabank.value) {
-            await loadStrategies();
-          }
-          // Always prefer "Portfolios" databank for the portfolio section
-          const portDb = databanks.value.find(d => d.name === 'Portfolios');
-          if (portDb && portfolioDatabank.value !== 'Portfolios') {
-            portfolioDatabank.value = 'Portfolios';
-          }
-          // Load portfolio list in the same databank
-          portfolios.value = [];
-          loadPortfolios();
-        } catch (e) { errorMessage.value = 'Could not load databanks: ' + e.message; }
-        finally { loadingDatabanks.value = false; }
+        await syncDatabanksForProject(newVal);
       }
     });
 
@@ -977,6 +1047,9 @@ createApp({
     const portfolioSelectedIdx = ref(null);
     const portfolioEquityLoading = ref({});
     const portfolioEquityErrors = ref({});
+    // ── Unified Results ────────────────────────────────────────────
+    const resultsAggregate = ref(null);
+    const resultsAggregateLoading = ref(false);
     const _POLICY_POLL_MS = 3000;
     let _portfolioPollTimer = null;
 
@@ -1012,6 +1085,24 @@ createApp({
         portfolioStrategies.value = [];
         portfolioResults.value = [];
         portfolios.value = [];
+      }
+    });
+
+    // Reload portfolios when databank changes
+    watch(portfolioDatabank, (newVal, oldVal) => {
+      if (newVal && newVal !== oldVal) {
+        selectedPortfolio.value = '';
+        portfolioStrategies.value = [];
+        portfolioResults.value = [];
+        portfolios.value = [];
+        loadPortfolios();
+      }
+    });
+
+    // Load portfolio strategies when portfolio is selected
+    watch(selectedPortfolio, (newVal, oldVal) => {
+      if (newVal && newVal !== oldVal) {
+        loadPortfolio();
       }
     });
 
@@ -1112,6 +1203,20 @@ createApp({
                 _portfolioPollTimer = null;
                 portfolioRunning.value = false;
                 portfolioBacktesting.value = false;
+                // Fetch aggregate once all strategies done
+                try {
+                  resultsAggregateLoading.value = true;
+                  const r = await apiGet('/results?portfolio_key=' + encodeURIComponent(portfolioPortfolioKey.value));
+                  if (r.ok) {
+                    resultsAggregate.value = r;
+                    await nextTick();
+                    _drawAggregateEquity(resultsAggregate.value.equity);
+                  }
+                } catch (e) {
+                  console.warn('Failed to fetch portfolio aggregate:', e);
+                } finally {
+                  resultsAggregateLoading.value = false;
+                }
               }
             }
           } catch (e) {
@@ -1191,6 +1296,25 @@ createApp({
       }
     }
 
+    function _drawAggregateEquity(equityData) {
+      if (!equityData) return;
+      const sqxPts = (equityData.sqx && equityData.sqx.points) || [];
+      const mt5Pts = (equityData.mt5 && equityData.mt5.points) || [];
+      const deposit = (equityData.sqx && equityData.sqx.points && equityData.sqx.points[0] && equityData.sqx.points[0][1]) || 10000;
+      const values = [deposit];
+      for (const p of sqxPts) values.push(p[1]);
+      for (const p of mt5Pts) values.push(p[1]);
+      let min = Math.min(...values), max = Math.max(...values);
+      const padY = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1;
+      min -= padY; max += padY;
+      for (const [key, points] of [['sqx', sqxPts], ['mt5', mt5Pts]]) {
+        const canvas = document.getElementById('results-aggregate-' + key);
+        if (!canvas) continue;
+        equityDrawState['results-aggregate-' + key] = { points, min, max, deposit, which: key };
+        paintEquityCanvas(canvas);
+      }
+    }
+
     function portfolioEquityError(idx) {
       const d = portfolioEquity.value['port-' + idx];
       if (!d) return null;
@@ -1253,17 +1377,32 @@ createApp({
     async function refreshSymbols() {
       if (refreshingSymbols.value) return;
       refreshingSymbols.value = true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
       try {
-        const r = await apiGet('/mt5-symbols/live');
+        const res = await fetch(BRIDGE_URL + '/mt5-symbols/live', { signal: controller.signal });
+        const r = await res.json();
         const list = r.symbols || [];
         if (!list.length) throw new Error('Empty symbol list');
-        mt5Symbols.value = list;
-        if (form.symbol && !list.some((s) => s.symbol === form.symbol)) {
-          form.symbol = list[0].symbol;
+        // Ensure proper format: each item must have .symbol and .servers
+        const formatted = list.map(s =>
+          typeof s === 'string' ? { symbol: s, servers: ['mapped'] } : s
+        );
+        mt5Symbols.value = formatted;
+        if (form.symbol && !formatted.some((s) => s.symbol === form.symbol)) {
+          form.symbol = formatted[0].symbol;
         }
-        logInfo('api', 'Loaded ' + list.length + ' symbols');
-      } catch (e) { logError('api', 'Symbol refresh failed: ' + e.message); }
-      finally { refreshingSymbols.value = false; }
+        logInfo('api', 'Loaded ' + formatted.length + ' symbols');
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          logError('api', 'Symbol refresh timed out after 8s. MT5 may still be initializing. You can type symbols manually.');
+        } else {
+          logError('api', 'Symbol refresh failed: ' + e.message);
+        }
+      } finally {
+        clearTimeout(timer);
+        refreshingSymbols.value = false;
+      }
     }
 
     // ── Bridge check ────────────────────────────────────────────────
@@ -1410,6 +1549,24 @@ createApp({
         loadEquityFor('single', { project, databank, strategyName, deposit: form.deposit });
         phase.value = 'done';
         lastBacktestName.value = strategyName + ' on ' + form.symbol + ' / ' + form.period;
+        // Fetch aggregate for unified results view
+        try {
+          resultsAggregateLoading.value = true;
+          const r = await apiGet(
+            '/results?strategy_name=' + encodeURIComponent(strategyName) +
+            '&project=' + encodeURIComponent(project) +
+            '&databank=' + encodeURIComponent(databank)
+          );
+          if (r.ok) {
+            resultsAggregate.value = r;
+            await nextTick();
+            _drawAggregateEquity(resultsAggregate.value.equity);
+          }
+        } catch (e) {
+          console.warn('Failed to fetch aggregate:', e);
+        } finally {
+          resultsAggregateLoading.value = false;
+        }
       } catch (e) {
         errorMessage.value = e.message;
         phase.value = 'error';
@@ -1791,19 +1948,6 @@ createApp({
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
       window.addEventListener('message', handleMessage);
       checkBridge();
-      // Wait for bridge online, then check if we need to initialize portfolio section
-      while (bridgeStatus.value !== 'online') {
-        await new Promise(r => setTimeout(r, 200));
-      }
-      await new Promise(r => setTimeout(r, 300));
-      if (portfolioProject.value && databanks.value.length && !portfolios.value.length) {
-        const portDb = databanks.value.find(d => d.name === 'Portfolios');
-        const targetDb = portDb || databanks.value.find(d => d.records && d.records > 0);
-        if (targetDb && portfolioDatabank.value !== targetDb.name) {
-          portfolioDatabank.value = targetDb.name;
-        }
-        loadPortfolios();
-      }
     });
 
     return {
@@ -1843,6 +1987,8 @@ createApp({
       toggleSettings, toggleInstances, saveSettings,
       // Log
       logEntries, logFilter, logExpanded, filteredLogEntries, clearLog, copyLog,
+      // Unified Results
+      resultsAggregate, resultsAggregateLoading,
     };
   },
 }).mount('#app');
