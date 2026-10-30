@@ -489,7 +489,7 @@
             <label>Databank</label>
             <select v-model="portfolioDatabank">
               <option disabled value="">Choose a databank</option>
-              <option v-for="d in databanks" :key="d.name" :value="d.name">{{ d.name }}</option>
+              <option v-for="d in databanks.filter(db => db.name !== 'Portfolios')" :key="d.name" :value="d.name">{{ d.name }}</option>
             </select>
           </div>
           <div class="field">
@@ -934,7 +934,7 @@ createApp({
         }
         // Default portfolio databank to first available (portfolios may live in a databank with 0 strategy records)
         if (databanks.value.length) {
-          const defaultDb = databanks.value[0].name;
+          const defaultDb = databanks.value.find(d => d.name !== 'Portfolios')?.name || databanks.value[0].name;
           if (defaultDb !== portfolioDatabank.value) {
             portfolioDatabank.value = defaultDb;
             await loadPortfolios();
@@ -1359,7 +1359,7 @@ createApp({
         logInfo('api', 'Loaded ' + formatted.length + ' symbols');
       } catch (e) {
         if (e.name === 'AbortError') {
-          logError('api', 'Symbol refresh timed out after 8s. MT5 may still be initializing. You can type symbols manually.');
+          logError('api', 'Symbol refresh timed out after 45s. MT5 may still be initializing. You can type symbols manually.');
         } else {
           logError('api', 'Symbol refresh failed: ' + e.message);
         }
