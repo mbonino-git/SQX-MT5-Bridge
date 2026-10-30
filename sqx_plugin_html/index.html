@@ -622,7 +622,7 @@
                 <td style="text-align:left;font-weight:600;padding-left:8px;">{{ s.name }}</td>
                 <td style="font-size:11px;">{{ s.symbol || (s.error ? s.error : '—') }}</td>
                 <td style="font-size:11px;">{{ s.timeframe || '—' }}</td>
-                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' →’ ' + s.to_date.replace('.', '-')) : '—' }}</td>
+                <td style="font-size:11px;">{{ s.from_date && s.to_date ? (s.from_date.replace('.', '-') + ' → ' + s.to_date.replace('.', '-')) : '—' }}</td>
               </tr>
             </tbody>
           </table>
@@ -1008,7 +1008,7 @@ createApp({
       const res = await fetch(BRIDGE_URL + path);
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      logInfo('api', 'GET ' + path + ' →’ OK (' + logTimeSince(startMs) + ')');
+      logInfo('api', 'GET ' + path + ' → OK (' + logTimeSince(startMs) + ')');
       return body;
     }
     async function apiPost(path, payload) {
@@ -1020,7 +1020,7 @@ createApp({
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      logInfo('api', 'POST ' + path + ' →’ OK (' + logTimeSince(startMs) + ')');
+      logInfo('api', 'POST ' + path + ' → OK (' + logTimeSince(startMs) + ')');
       return body;
     }
 
@@ -1432,7 +1432,7 @@ createApp({
       if (!which) return 'No data';
       if (!which.points || !which.points.length) return which.error || 'No data';
       const pts = which.points;
-      return fmtMoney(pts[0][1]) + ' →’ ' + fmtMoney(pts[pts.length - 1][1])
+      return fmtMoney(pts[0][1]) + ' → ' + fmtMoney(pts[pts.length - 1][1])
         + ' · ' + (pts.length - 1) + ' trades';
     }
 
@@ -1756,7 +1756,7 @@ createApp({
       if (!side) return 'No data';
       if (!side.points || !side.points.length) return side.error || 'No data';
       const pts = side.points;
-      return fmtMoney(pts[0][1]) + ' →’ ' + fmtMoney(pts[pts.length - 1][1])
+      return fmtMoney(pts[0][1]) + ' → ' + fmtMoney(pts[pts.length - 1][1])
         + ' · ' + (pts.length - 1) + ' trades';
     }
 
