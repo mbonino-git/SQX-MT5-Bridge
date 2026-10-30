@@ -1901,25 +1901,45 @@ def _find_mt5_data_dir(terminal_install_path: str) -> Path | None:
 
 # ── Kill Stale MT5 Processes (BotPulse pattern) ──────────────────────
 
+_mt5_active_pids: set[int] = set()  # PIDs of terminals we launched
+
+
 def _kill_stale_mt5_processes(terminal_path: str) -> None:
-    """Kill any existing MT5 terminal process running the same terminal.
+    """Kill only the configured terminal process, not other terminals.
     
     BotPulse calls killStaleTesterProcess() before each backtest to avoid
     the new instance connecting to an existing one's port instead of running
     as a standalone tester.
+    
+    KEY FIX: Match by full executable path, not just process name.
+    Previously matched 'terminal64.exe' in name, which killed ALL
+    MT5 terminals including MT5-01 (unrelated) and WORKBENCH-01 launched
+    by concurrent job threads.
     """
     import psutil
     
-    exe_name = Path(terminal_path).name
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+    resolved = Path(terminal_path).resolve()
+    resolved_str = str(resolved).lower()
+    processes = list(psutil.process_iter(['pid', 'name', 'exe']))  # materialize first
+    for proc in processes:
         try:
-            if proc.info['name'] and exe_name.lower() in proc.info['name'].lower():
-                pid = proc.info['pid']
-                # Don't kill ourselves
-                if pid == os.getpid():
-                    continue
-                print(f"[MT5] Killing stale process: PID {pid} ({exe_name})")
-                proc.kill()
+            exe_name = proc.info.get('name') or ''
+            if 'terminal64' not in exe_name.lower():
+                continue
+            pid = proc.info['pid']
+            if pid == os.getpid():
+                continue
+            if pid in _mt5_active_pids:
+                continue
+            # Check exe path WITHOUT hanging — use .exe() only if needed
+            # and catch any OSError (can hang on zombie processes on Windows)
+            try:
+                proc_exe = proc.info.get('exe')
+                if proc_exe and Path(proc_exe).resolve() == resolved:
+                    print(f"[MT5] Killing stale process: PID {pid} ({proc_exe})")
+                    proc.kill()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                pass
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -2034,7 +2054,6 @@ async def _run_backtest_job(job: BacktestJob):
             f.write(f"[BACKTEST] Reports dir: {reports_dir}\n")
     except Exception:
         pass
-    print(f"[BACKTEST] INI written: {ini_path}", flush=True)
 
     # Kill any stale MT5 instance so the new one runs standalone
     _kill_stale_mt5_processes(job.terminal_path)
@@ -2042,8 +2061,8 @@ async def _run_backtest_job(job: BacktestJob):
 
     # Run blocking backtest in a separate thread to avoid blocking the event loop
     import threading
-    log_path = Path(__file__).resolve().parent.parent / "backtest.log"
     try:
+        log_path = Path(__file__).resolve().parent.parent / "backtest.log"
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"[BACKTEST] Starting thread for job {job.job_id}\n")
     except Exception:
@@ -2116,6 +2135,8 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
         stderr=subprocess.DEVNULL,
     )
     print(f"[BACKTEST] terminal64.exe /portable started with PID {proc.pid}")
+    # Register this PID so _kill_stale_mt5_processes doesn't kill it again
+    _mt5_active_pids.add(proc.pid)
 
     # Wait for MT5 to initialize before polling
     time.sleep(10)
@@ -2191,6 +2212,9 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
 
         # Poll for process completion
         time.sleep(2)
+
+    # Clean up tracked PID so it can be reused
+    _mt5_active_pids.discard(proc.pid)
 
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"[BACKTEST] terminal64.exe process exited with code {proc.returncode}\n")
