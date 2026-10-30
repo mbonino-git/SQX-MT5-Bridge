@@ -607,8 +607,8 @@
             </div>
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
-            {{ portfolioStrategies.length }} strategies found Â· {{ portfolioFromLabel }}
-            <span v-if="portfolioInitialCapital"> Â· Initial capital: {{ portfolioInitialCapital.toLocaleString() }}</span>
+            {{ portfolioStrategies.length }} strategies found · {{ portfolioFromLabel }}
+            <span v-if="portfolioInitialCapital"> · Initial capital: {{ portfolioInitialCapital.toLocaleString() }}</span>
           </div>
           <table class="compare" style="font-size:11px;margin-bottom:10px;">
             <thead>
@@ -1119,8 +1119,8 @@ createApp({
     const resultsAggregateLoading = ref(false);
     // —€—€ Collapsible Sections —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
     const sectionCollapse = reactive({
-      strategy: false,
-      singleBacktest: false,
+      strategy: true,
+      singleBacktest: true,
       portfolio: false,
       progress: false,
       batch: false,
@@ -1424,7 +1424,7 @@ createApp({
       if (!d) return null;
       const hasAny = ['sqx', 'mt5'].some(k => d[k] && d[k].points && d[k].points.length);
       if (hasAny) return null;
-      return 'No equity data: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' Â· ');
+      return 'No equity data: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' · ');
     }
     function portfolioEquityNote(idx, side) {
       const d = portfolioEquity.value['port-' + idx];
@@ -1433,7 +1433,7 @@ createApp({
       if (!which.points || !which.points.length) return which.error || 'No data';
       const pts = which.points;
       return fmtMoney(pts[0][1]) + ' →’ ' + fmtMoney(pts[pts.length - 1][1])
-        + ' Â· ' + (pts.length - 1) + ' trades';
+        + ' · ' + (pts.length - 1) + ' trades';
     }
 
     // —€—€ Settings auto-fill —€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€—€
@@ -1574,7 +1574,7 @@ createApp({
       if (c === 'done') return '✓“';
       if (c === 'active') return '…';
       if (c === 'error') return '✓—';
-      return 'Â·';
+      return '·';
     }
 
     function normalizeStatValue(key, value) {
@@ -1741,7 +1741,7 @@ createApp({
       if (!d) return '';
       const hasAny = ['sqx', 'mt5'].some(k => d[k] && d[k].points && d[k].points.length);
       if (hasAny) return '';
-      return 'No equity data to chart: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' Â· ');
+      return 'No equity data to chart: ' + [d.sqx?.error, d.mt5?.error].filter(Boolean).join(' · ');
     }
 
     function fmtMoney(v) {
@@ -1757,7 +1757,7 @@ createApp({
       if (!side.points || !side.points.length) return side.error || 'No data';
       const pts = side.points;
       return fmtMoney(pts[0][1]) + ' →’ ' + fmtMoney(pts[pts.length - 1][1])
-        + ' Â· ' + (pts.length - 1) + ' trades';
+        + ' · ' + (pts.length - 1) + ' trades';
     }
 
     function drawBatchEquity(idx) {
