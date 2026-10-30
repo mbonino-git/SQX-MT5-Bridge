@@ -521,7 +521,7 @@
                 <select v-model="portfolioTickModel">
                   <option value="every_tick_real">Every tick (recommended)</option>
                   <option value="every_tick">Every tick (generated)</option>
-                  <option value="ohlc_1min">1 minute OHLC</option>
+                  <option value="ohlc_1min" selected>1 minute OHLC</option>
                   <option value="open_prices">Open prices only</option>
                   <option value="math_calculations">Math calculations</option>
                 </select>
@@ -1105,6 +1105,7 @@ createApp({
           '&databank=' + encodeURIComponent(portfolioDatabank.value) +
           '&portfolio=' + encodeURIComponent(selectedPortfolio.value)
         );
+        console.log('[loadPortfolio] portfolio=' + selectedPortfolio.value + ' ok=' + r.ok + ' from=' + r.fromDate + ' to=' + r.toDate);
         if (!r.ok) {
           portfolioError.value = r.error || 'Failed to load portfolio';
           return;
@@ -1118,12 +1119,14 @@ createApp({
           portfolioFromLabel.value = r.fromDate.replace('.', '-') + ' → ' + r.toDate.replace('.', '-');
           portfolioFromDate.value = r.fromDate.replace('.', '-');
           portfolioToDate.value = r.toDate.replace('.', '-');
+          console.log('[loadPortfolio] dates set: ' + portfolioFromDate.value + ' → ' + portfolioToDate.value);
         } else {
           portfolioFromLabel.value = '';
         }
         portfolioInitialCapital.value = r.initialCapital || null;
       } catch (e) {
         portfolioError.value = 'Could not load portfolio: ' + e.message;
+        console.log('[loadPortfolio] error: ' + e.message);
       } finally { loadingPortfolioStrategies.value = false; }
     }
 
@@ -1354,7 +1357,6 @@ createApp({
     const portfolioTickModel = ref('ohlc_1min');
 
     async function loadBacktestSettings() {
-      form.fromDate = ''; form.toDate = ''; form.symbol = ''; form.deposit = null;
       if (!selectedProject.value || !selectedDatabank.value || !selectedStrategyName.value) return;
       loadingBacktestSettings.value = true;
       backtestSettingsError.value = '';
@@ -1364,16 +1366,25 @@ createApp({
           '&databank=' + encodeURIComponent(selectedDatabank.value) +
           '&strategy_name=' + encodeURIComponent(selectedStrategyName.value)
         );
+        console.log('[loadBacktestSettings] project=' + selectedProject.value + ' strategy=' + selectedStrategyName.value + ' response=' + JSON.stringify(r));
         if (r.ok) {
           form.fromDate = typeof r.fromDate === 'string' ? r.fromDate.replaceAll('.', '-') : '';
           form.toDate = typeof r.toDate === 'string' ? r.toDate.replaceAll('.', '-') : '';
+          if (r.timeframe) form.period = r.timeframe;
           form.deposit = r.initialCapital || null;
-          if (r.symbol) form.symbol = r.symbol;
+          if (r.symbol) {
+            form.symbol = r.symbol;
+            // Ensure strategy symbol is in the dropdown even if MT5 query doesn't have it yet
+            if (!mt5Symbols.value.some(s => s.symbol === r.symbol)) {
+              mt5Symbols.value.push({ symbol: r.symbol, servers: ['auto'] });
+            }
+          }
         } else {
           backtestSettingsError.value = 'Could not load settings: ' + (r.error || 'Unknown');
         }
       } catch (e) {
         backtestSettingsError.value = 'Could not load settings: ' + e.message;
+        console.log('[loadBacktestSettings] error=' + e.message);
       } finally { loadingBacktestSettings.value = false; }
     }
 
