@@ -1112,20 +1112,21 @@ createApp({
           portfolioError.value = r.error || 'Failed to load portfolio';
           return;
         }
-        portfolioStrategies.value = r.strategies || [];
-        // Auto-select all strategies without errors
-        portfolioSelectedStrategies.value = portfolioStrategies.value
-          .map((s, i) => s.error ? -1 : i)
-          .filter(i => i >= 0);
+        // Set dates first before block renders
         if (r.fromDate && r.toDate) {
-          portfolioFromLabel.value = r.fromDate.replaceAll('.', '-') + ' â†’ ' + r.toDate.replaceAll('.', '-');
           portfolioFromDate.value = r.fromDate.replaceAll('.', '-');
           portfolioToDate.value = r.toDate.replaceAll('.', '-');
-          console.log('[loadPortfolio] dates set: ' + portfolioFromDate.value + ' â†’ ' + portfolioToDate.value);
+          portfolioFromLabel.value = r.fromDate.replaceAll('.', '-') + ' \u2192 ' + r.toDate.replaceAll('.', '-');
+          console.log('[loadPortfolio] dates set: ' + portfolioFromDate.value + ' \u2192 ' + portfolioToDate.value);
         } else {
           portfolioFromLabel.value = '';
         }
         portfolioInitialCapital.value = r.initialCapital || null;
+        // Now set strategies
+        portfolioStrategies.value = r.strategies || [];
+        portfolioSelectedStrategies.value = portfolioStrategies.value
+          .map((s, i) => s.error ? -1 : i)
+          .filter(i => i >= 0);
       } catch (e) {
         portfolioError.value = 'Could not load portfolio: ' + e.message;
         console.log('[loadPortfolio] error: ' + e.message);
@@ -1988,6 +1989,10 @@ createApp({
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
       window.addEventListener('message', handleMessage);
       checkBridge();
+      // Auto-load portfolio dates/tick-model if a portfolio is already selected
+      if (selectedPortfolio.value && portfolioProject.value && portfolioDatabank.value) {
+        await loadPortfolio();
+      }
     });
 
     return {
@@ -2013,6 +2018,7 @@ createApp({
       portfolios, loadingPortfolios, portfolioProject, portfolioDatabank,
       selectedPortfolio, portfolioStrategies, portfolioSelectedStrategies,
       loadingPortfolioStrategies, portfolioError, portfolioFromLabel,
+      portfolioFromDate, portfolioToDate, portfolioTickModel,
       portfolioInitialCapital, portfolioRunning, portfolioResults,
       portfolioPortfolioKey, portfolioPortfolioTotal, portfolioPortfolioCompleted,
       portfolioErrorMessage, portfolioBacktesting, portfolioSelectedIdx,
