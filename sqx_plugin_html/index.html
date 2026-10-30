@@ -757,7 +757,7 @@
       </div>
 
       <!-- Unified Results Section -->
-      <div class="card" v-if="comparison.length || (portfolioResults.length && portfolioRunning) || (resultsAggregate && resultsAggregate.aggregate)">
+      <div class="card" v-if="comparison.length || portfolioResults.length || (resultsAggregate && resultsAggregate.aggregate)">
         <div class="card-header" @click="toggleSection('results')">
           <h3>Results</h3>
           <span class="card-toggle" :class="{ collapsed: !sectionCollapse.results }">▼</span>
@@ -815,11 +815,11 @@
           <div v-if="portfolioErrorMessage" class="error-box" style="margin-top:6px;">{{ portfolioErrorMessage }}</div>
         </div>
 
-        <!-- Results Table - Portfolio Mode -->
-        <div v-else-if="portfolioResults.length">
+        <!-- Results Table - Portfolio Mode (visible while running AND when finished) -->
+        <div v-if="portfolioResults.length">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
             {{ portfolioResults.filter(r => r.status === 'done').length }} succeeded,
-            {{ portfolioResults.filter(r => r.status === 'error').length }} failed.
+            {{ portfolioResults.filter(r => r.status === 'error' || r.status === 'failed').length }} failed.
             Click a row to see SQX vs MT5 comparison.
           </div>
           <table class="compare" style="font-size:11px;">
@@ -829,9 +829,11 @@
                 <td style="text-align:left;font-weight:600;padding-left:8px;">{{ r.strategyName }}</td>
                 <td>
                   <span v-if="r.status === 'done'" style="color:var(--success);">&check; Done</span>
-                  <span v-else-if="r.status === 'running'" style="color:var(--primary);">&hellip; Running</span>
+                  <span v-else-if="r.status === 'running' || r.status === 'testing'" style="color:var(--primary);">&hellip; Running</span>
                   <span v-else-if="r.status === 'aborted'" style="color:var(--text-muted);">Aborted</span>
-                  <span v-else style="color:var(--danger);" :title="r.error">&cross; Error</span>
+                  <span v-else-if="r.status === 'failed'" style="color:var(--danger);" :title="r.error">&cross; Failed</span>
+                  <span v-else-if="r.status === 'error'" style="color:var(--danger);" :title="r.error">&cross; Error</span>
+                  <span v-else style="color:var(--text-muted);">&hellip; Pending</span>
                 </td>
                 <td>{{ r.sqxStats?.NetProfit != null ? formatBatchVal(r.sqxStats.NetProfit) : '-' }}</td>
                 <td>{{ r.mt5Stats?.NetProfit != null ? formatBatchVal(r.mt5Stats.NetProfit) : '-' }}</td>
@@ -1130,7 +1132,7 @@ createApp({
     function toggleSection(key) {
       sectionCollapse[key] = !sectionCollapse[key];
     }
-    const _POLICY_POLL_MS = 30000;
+    const _POLICY_POLL_MS = 5000;
     let _portfolioPollTimer = null;
 
     function _portfolioSelectedSet() {
@@ -1267,11 +1269,14 @@ createApp({
         const resp = await apiPost('/portfolio/backtest', body);
         if (!resp.ok) throw new Error(resp.error || 'Failed to start portfolio backtest');
         portfolioPortfolioKey.value = resp.portfolioKey;
-        portfolioPortfolioTotal.value = resp.jobs.length;
-        portfolioResults.value = resp.jobs.map(j => ({
-          strategyName: j.strategy,
+        // Build rows from the selected strategies themselves — the non-blocking API may
+        // return a jobs list without live status yet; per-strategy status arrives via /portfolio-status
+        portfolioPortfolioTotal.value = origIndices.length || resp.total || 0;
+        const nameByOrigIdx = new Map(portfolioStrategies.value.map((s, i) => [i, s.name]));
+        portfolioResults.value = origIndices.map(origIdx => ({
+          strategyName: nameByOrigIdx.get(origIdx),
           status: 'pending',
-          index: j.index,
+          index: origIdx,
           project: portfolioProject.value,
           databank: 'Results',
           deposit: form.deposit || 10000,
@@ -1283,25 +1288,53 @@ createApp({
             const st = await apiGet('/portfolio-status?portfolio_key=' + encodeURIComponent(portfolioPortfolioKey.value));
             if (st.ok) {
               portfolioPortfolioCompleted.value = st.completed || 0;
-              // Update per-job status
+              // Update per-job status. Prefer index matching (strategy names can
+              // repeat inside a portfolio); fall back to name, consuming each
+              // matching row once per poll so duplicates don't collapse.
+              const usedRows = new Set();
+              let justFinishedIdx = null;
               for (const job of st.jobs) {
-                const existing = portfolioResults.value.find(r => r.strategyName === job.strategy);
-                if (existing) {
+                let rowIdx = -1;
+                if (job.index != null) {
+                  rowIdx = portfolioResults.value.findIndex(r => r.index === job.index);
+                }
+                if (rowIdx < 0) {
+                  rowIdx = portfolioResults.value.findIndex((r, i) => usedRows.has(i) === false && r.strategyName === job.strategy && r.status === 'pending');
+                }
+                if (rowIdx < 0) {
+                  rowIdx = portfolioResults.value.findIndex((r, i) => usedRows.has(i) === false && r.strategyName === job.strategy);
+                }
+                if (rowIdx >= 0) {
+                  usedRows.add(rowIdx);
+                  const existing = portfolioResults.value[rowIdx];
+                  const prevStatus = existing.status;
                   existing.status = job.status || 'pending';
+                  if (job.jobId && existing.jobId !== job.jobId) existing.jobId = job.jobId;
                   if (job.project) existing.project = job.project;
                   if (job.deposit) existing.deposit = job.deposit;
                   if (job.result) {
                     const comp = job.result.comparison || [];
                     existing.sqxStats = job.result.sqxStats || {};
-                    existing.mt5Stats = job.result.mt5Stats || {};
+                    existing.mt5Stats = job.result.stats || job.result.mt5Stats || {};
                     existing.comparison = comp;
                     existing.error = null;
                   }
                   if (job.error) existing.error = job.error;
+                  // Show each finished strategy right away: auto-expand its
+                  // comparison + charts when nothing else is selected (2A-like view)
+                  if (!justFinishedIdx && prevStatus !== 'done' && existing.status === 'done') {
+                    justFinishedIdx = rowIdx;
+                  }
                 }
               }
-              const allDone = portfolioResults.value.length > 0 &&
-                portfolioResults.value.every(r => r.status === 'done' || r.status === 'error' || r.status === 'aborted');
+              if (justFinishedIdx !== null && portfolioSelectedIdx.value === null) {
+                selectPortfolioResult(justFinishedIdx);
+              }
+              const terminal = ['done', 'error', 'failed', 'aborted'];
+              const allDone = portfolioResults.value.length > 0 && (
+                portfolioResults.value.every(r => terminal.includes(r.status)) ||
+                ((st.completed || 0) >= portfolioResults.value.length)
+              );
               if (allDone) {
                 clearInterval(_portfolioPollTimer);
                 _portfolioPollTimer = null;
@@ -1365,11 +1398,18 @@ createApp({
       if (!row || row.status !== 'done' || portfolioEquity.value['port-' + idx]) return;
       portfolioEquityLoading.value = { ...portfolioEquityLoading.value, ['port-' + idx]: true };
       try {
-        const q = '?project=' + encodeURIComponent(row.project || '')
-          + '&databank=' + encodeURIComponent(row.databank || 'Results')
-          + '&strategy_name=' + encodeURIComponent(row.strategyName)
-          + '&deposit=' + encodeURIComponent(row.deposit || form.deposit || 10000);
-        const r = await apiGet('/equity' + q);
+        // Preferred: per-job equity (MT5 from the job's CSV, SQX from portfolio orders)
+        let r;
+        if (row.jobId) {
+          r = await apiGet('/backtest/' + encodeURIComponent(row.jobId) +
+            '/equity?deposit=' + encodeURIComponent(row.deposit || form.deposit || 10000));
+        } else {
+          const q = '?project=' + encodeURIComponent(row.project || '')
+            + '&databank=' + encodeURIComponent(row.databank || 'Results')
+            + '&strategy_name=' + encodeURIComponent(row.strategyName)
+            + '&deposit=' + encodeURIComponent(row.deposit || form.deposit || 10000);
+          r = await apiGet('/equity' + q);
+        }
         portfolioEquity.value = { ...portfolioEquity.value, ['port-' + idx]: r };
       } catch (e) {
         portfolioEquity.value = { ...portfolioEquity.value, ['port-' + idx]: { deposit: form.deposit || 10000, sqx: null, mt5: null, error: e.message } };

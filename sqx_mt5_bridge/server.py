@@ -741,7 +741,7 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
             continue
         bt_body = {
             "project": project,
-            "databank": "Results",
+            "databank": databank,
             "strategyName": strat["name"],
             "symbol": strat["symbol"],
             "period": strat.get("timeframe") or period,
@@ -762,7 +762,7 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
 
     # Prefetch canonical params concurrently for all valid strategies
     canon_tasks = [
-        asyncio.to_thread(_canonicalize_backtest_params, project, "Results", strat["name"])
+        asyncio.to_thread(_canonicalize_backtest_params, project, databank, strat["name"])
         for _, strat, _ in valid_strats
     ]
     canon_results = await asyncio.gather(*canon_tasks, return_exceptions=True)
@@ -785,6 +785,24 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
             bt_body["deposit"] = canon["deposit"]
         bodies.append(bt_body)
 
+    # Initialize in-memory tracking BEFORE launching the task so /portfolio-status
+    # reflects this run immediately (no stale state from a previous run)
+    job_list = [
+        {"index": idx, "jobId": None, "strategy": strat.get("name", ""), "status": "pending"}
+        for idx, strat in enumerate(strategy_list)
+    ]
+    _portfolio_backtest_jobs[portfolio_key] = {
+        "project": project,
+        "databank": databank,
+        "portfolio": portfolio,
+        "strategies": strategy_list,
+        "jobs": job_list,
+        "total": len(strategy_list),
+        "completed": 0,
+        "deposit": deposit,
+        "started_at": time.time(),
+    }
+
     # Run compile + sequential backtests in background (non-blocking)
     task = asyncio.create_task(_run_portfolio_backtest(
         portfolio_key, project, databank, portfolio,
@@ -795,7 +813,7 @@ async def submit_portfolio_backtest(body: dict[str, Any]):
     return {
         "ok": True,
         "portfolioKey": portfolio_key,
-        "jobs": [],
+        "jobs": job_list,
         "total": len(strategy_list),
         "skipped": 0,
     }
@@ -807,6 +825,8 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
     import traceback as tb
     print(f"[PORTFOLIO] >>> BACKGROUND TASK STARTED <<< portfolio={portfolio} strategies={len(bodies)}", flush=True)
     try:
+        # Orders change when SQX recomputes the portfolio — invalidate cache per run
+        _PORTFOLIO_ORDERS_CACHE.pop((project, databank, portfolio), None)
         print(f"[PORTFOLIO] >>> Starting compilation for {len(valid_strats)} strategies...", flush=True)
         # Auto-compile all strategies before launching backtests
         compiled, failed, ex5_paths = await compile_portfolio_strategies(
@@ -819,41 +839,40 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
         # Build lookup: strategy_name → compiled ex5_path
         compiled_set = set(ex5_paths.keys())
 
-        # Initialize in-memory tracking
-        job_list = []
-        _portfolio_backtest_jobs[portfolio_key] = {
-            "project": project,
-            "databank": databank,
-            "portfolio": portfolio,
-            "strategies": strategy_list,
-            "jobs": job_list,
-            "total": len(strategy_list),
-            "completed": 0,
-            "deposit": deposit,
-            "started_at": time.time(),
-        }
+        # Reuse the tracking entry pre-created by the endpoint (never replace it,
+        # so /portfolio-status shows fresh state immediately)
+        track = _portfolio_backtest_jobs.get(portfolio_key)
+        if not track:
+            track = {
+                "project": project,
+                "databank": databank,
+                "portfolio": portfolio,
+                "strategies": strategy_list,
+                "jobs": [],
+                "total": len(strategy_list),
+                "completed": 0,
+                "deposit": deposit,
+                "started_at": time.time(),
+            }
+            _portfolio_backtest_jobs[portfolio_key] = track
+        job_list = track.setdefault("jobs", [])
 
-        # Pre-populate job_list with ALL strategies (so client sees all N)
+        # Update pre-populated job_list with compile results: ALL strategies (so client sees all N)
         for idx, strat in enumerate(strategy_list):
             strat_name = strat["name"]
+            # pad in case job_list was pre-created empty
+            while len(job_list) <= idx:
+                job_list.append({"index": len(job_list), "jobId": None,
+                                 "strategy": strategy_list[len(job_list)].get("name", ""),
+                                 "status": "pending"})
             if strat_name not in compiled_set:
-                # Mark failed strategies upfront
-                job_list.append({
-                    "index": idx,
+                job_list[idx].update({
                     "jobId": None,
                     "strategy": strat_name,
                     "status": "failed",
                     "error": "Failed to compile (no EX5, no source in SQX)",
                 })
                 print(f"[PORTFOLIO] PRE-SKIPPED {idx+1}/{len(bodies)}: {strat_name}")
-            else:
-                # Mark compiled strategies as pending
-                job_list.append({
-                    "index": idx,
-                    "jobId": None,
-                    "strategy": strat_name,
-                    "status": "pending",
-                })
 
         # Launch backtest jobs sequentially: wait for each to complete before the next
         skipped = 0
@@ -865,10 +884,6 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
             strat_name = strat["name"]
             
             print(f"[PORTFOLIO] Loop iteration {idx}: orig_idx={orig_idx} name={strat_name}", flush=True)
-            # orig_strat[0] = original index in strategy_list
-            orig_idx = orig_strat[0]
-            strat = orig_strat[1]
-            strat_name = strat["name"]
             
             # Mark this job as "testing" (update pre-populated entry)
             if orig_idx < len(job_list):
@@ -912,7 +927,7 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
                 # Wait for this job to complete before launching the next
                 max_wait = 3600  # 1 hour max per job
                 elapsed = 0
-                poll_interval = 30
+                poll_interval = 5   # fast loop — UI polls every 5s, don't lag behind
                 while elapsed < max_wait:
                     conn = _get_db()
                     row = conn.execute(
@@ -940,9 +955,16 @@ async def _run_portfolio_backtest(portfolio_key, project, databank, portfolio,
                     if err_row and err_row[0]:
                         job_list[orig_idx]["error"] = err_row[0]
 
-                # Update completed count
+                # Per-strategy SQX comparison + equity the moment the job finishes
+                if status == "done":
+                    dep = float(bt_body.get("deposit") or deposit or 10000)
+                    _enrich_job_result_with_sqx(
+                        project, databank, portfolio, strat_name, job_id, dep,
+                    )
+
+                # Update completed count (failed also counts as terminal)
                 _portfolio_backtest_jobs[portfolio_key]["completed"] = sum(
-                    1 for j in job_list if j["status"] in ("done", "error")
+                    1 for j in job_list if j["status"] in ("done", "error", "failed")
                 )
                 print(f"[PORTFOLIO] Updated completed count: {_portfolio_backtest_jobs[portfolio_key]['completed']}/{len(job_list)}", flush=True)
 
@@ -1028,7 +1050,7 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
         if not jobs:
             return {"ok": False, "error": "No jobs found for portfolio strategies"}
 
-        completed = sum(1 for j in jobs if j["status"] in ("done", "error"))
+        completed = sum(1 for j in jobs if j["status"] in ("done", "error", "failed"))
         deposit = strategies_resp.get("initialCapital", 10000) or 10000
 
         # Save reconstructed state to in-memory dict
@@ -1050,33 +1072,30 @@ def get_portfolio_status(portfolio_key: str = Query(...)):
     if job_ids:
         placeholders = ",".join(["?"] * len(job_ids))
         rows = conn.execute(
-            f"SELECT status FROM jobs WHERE id IN ({placeholders})",
+            f"SELECT id, status, result, error FROM jobs WHERE id IN ({placeholders})",
             job_ids,
         ).fetchall()
-        completed = sum(1 for r in rows if r[0] in ("done", "error"))
+        details_by_id = {}
+        for r in rows:
+            details_by_id[r[0]] = (r[1], r[2], r[3])
+        completed = sum(1 for r in rows if r[1] in ("done", "error", "failed"))
         job_info["completed"] = completed
 
         for j in job_info["jobs"]:
-            if j.get("jobId"):
-                # Only fetch status first to avoid reading large JSON blobs
-                status_row = conn.execute(
-                    "SELECT status FROM jobs WHERE id = ?", (j["jobId"],)
-                ).fetchone()
-                if status_row:
-                    j["status"] = status_row[0]
-                # Fetch result/error separately only for completed jobs
-                if j["status"] in ("done", "error"):
-                    detail_row = conn.execute(
-                        "SELECT result, error FROM jobs WHERE id = ?", (j["jobId"],)
-                    ).fetchone()
-                    if detail_row:
-                        if detail_row[0]:
-                            try:
-                                j["result"] = json.loads(detail_row[0])
-                            except Exception:
-                                pass
-                        if detail_row[1]:
-                            j["error"] = detail_row[1]
+            jid = j.get("jobId")
+            if jid and jid in details_by_id:
+                det_status, det_result, det_error = details_by_id[jid]
+                j["status"] = det_status
+                if det_status not in ("pending", "testing"):
+                    if det_error:
+                        j["error"] = det_error
+                    if det_result:
+                        try:
+                            j["result"] = json.loads(det_result)
+                        except Exception:
+                            pass
+                elif j["status"] == "error":
+                    j["error"] = det_error
     conn.close()
 
     return {
@@ -1922,6 +1941,106 @@ def _canonicalize_backtest_params(project: str, databank: str, strategy_name: st
 # which only generated stub code with HasStrategyLogic() == false.
 
 
+def _extract_strategy_xml_from_sqx_sources(project: str, databank: str,
+                                           strategy_name: str) -> str | None:
+    """Locate a strategy's .sqx file and extract its strategy XML document.
+
+    Portfolio strategies are not standalone databank reports — the referenced
+    strategy definitions live as .sqx (ZIP) files:
+      1. Embedded inside portfolio .sqx files as PortfolioParts/<child>.sqx
+         (that is how Portfolio Master stores them).
+      2. As standalone .sqx strategy files under
+         <data>/projects/All_SQX_Files/<name>.sqx or <project>/.sqx/<name>.sqx.
+
+    Each .sqx ZIP holds a `strategy_Portfolio.xml` — the full StrategyFile
+    document SQX needs to produce MQ5 source. Returns None if not found.
+    """
+    import io
+    import zipfile
+
+    def _norm(name: str) -> str:
+        return re.sub(r"[\s_]", "", name or "").lower()
+
+    def _xml_from_zip(z: zipfile.ZipFile) -> str | None:
+        for entry in z.namelist():
+            if entry.endswith(("strategy_Portfolio.xml", "strategy.xml")):
+                try:
+                    return z.read(entry).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+        return None
+
+    target = _norm(strategy_name)
+    if not target:
+        return None
+
+    # Where to look, in order:
+    roots: list[Path] = [Path(settings.sqx_data_dir) / "projects"]
+    # Central .sqx vault used across the pipeline (project folders carry .sqx dirs)
+    roots.append(Path("C:/SQX_Files/projects"))
+
+    # 1) Portfolio .sqx files in this databank may embed the child strategy
+    db_dir = Path(settings.sqx_data_dir) / "projects" / project / "databanks" / databank
+    if db_dir.is_dir():
+        for pf in db_dir.glob("*.sqx"):
+            try:
+                with zipfile.ZipFile(pf) as z:
+                    for entry in z.namelist():
+                        base = entry.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                        if not base.lower().endswith(".sqx"):
+                            continue
+                        if _norm(base[:-4]) != target:
+                            continue
+                        inner = zipfile.ZipFile(io.BytesIO(z.read(entry)))
+                        xml = _xml_from_zip(inner)
+                        if xml:
+                            print(f"[COMPILER] Extracted strategy XML from portfolio part: {pf.name} -> {base}")
+                            return xml
+            except Exception:
+                continue
+
+    # 2) Standalone .sqx files: All_SQX_Files vault and per-project .sqx folders
+    for root in roots:
+        if not root.is_dir():
+            continue
+        direct = root / "All_SQX_Files" / f"{strategy_name}.sqx"
+        if not direct.exists():
+            # try normalized name against files (names contain spaces variants)
+            candidates = list(root.glob("All_SQX_Files/*.sqx"))
+        else:
+            candidates = [direct]
+        for cand in candidates:
+            if _norm(cand.stem) != target:
+                continue
+            try:
+                with zipfile.ZipFile(cand) as z:
+                    xml = _xml_from_zip(z)
+                    if xml:
+                        print(f"[COMPILER] Extracted strategy XML from: {cand}")
+                        return xml
+            except Exception:
+                continue
+        # per-project .sqx folders
+        for pdir in root.glob("*"):
+            if not pdir.is_dir():
+                continue
+            sqxfolder = pdir / ".sqx"
+            if not sqxfolder.is_dir():
+                continue
+            for cand in list(sqxfolder.glob("*.sqx")):
+                if _norm(cand.stem) != target:
+                    continue
+                try:
+                    with zipfile.ZipFile(cand) as z:
+                        xml = _xml_from_zip(z)
+                        if xml:
+                            print(f"[COMPILER] Extracted strategy XML from: {cand}")
+                            return xml
+                except Exception:
+                    continue
+    return None
+
+
 def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
                                  terminal_path: str) -> dict:
     """Compile MQ5 source for a strategy. Returns (success, ex5_path, error_msg)."""
@@ -1937,20 +2056,20 @@ def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
 
     # CACHE CHECK: If EX5 exists, use it directly.
     if not ex5_file.exists():
-        # Strategy naming mismatch: search for ANY matching EX5 in SQXBridge dir
-        # Take everything before the last numeric ID segment (e.g. "P0005-XAUUSD-H1-_EOD-XU_H1_" prefix)
-        prefix_match = re.match(r"^(.+?_\d+)$", safe_name)
-        if prefix_match:
-            prefix = prefix_match.group(1)
-            for f in data_dir.glob(f"{prefix}_*.ex5"):
-                ex5_file = f
-                break
-        # Also try: just match by strategy short name (P0005-...)
-        short_prefix = safe_name.split("_")[0] + "_"
-        if not ex5_file.exists():
-            for f in data_dir.glob(f"{short_prefix}*.ex5"):
-                ex5_file = f
-                break
+        # Strategy version IDs differ between portfolio references and disk names
+        # (e.g. portfolio says ...910106662 but the built EX5 is ...910106664).
+        # Match by the strategy's numeric ID instead of naive prefixes, which
+        # wrongly collide across sibling strategies (P0035-151 vs P0035-168).
+        id_match = re.search(r"_?(\d{6,})_", safe_name) or re.search(r"(\d{6,})$", safe_name)
+        if id_match:
+            sid = id_match.group(1)
+            if sid in ex5_file.name:
+                ex5_file = data_dir / f"{safe_name}.ex5"
+            else:
+                for f in data_dir.glob("*.ex5"):
+                    if sid in f.stem:
+                        ex5_file = f
+                        break
 
     if ex5_file.exists():
         return True, str(ex5_file), ""
@@ -1961,7 +2080,21 @@ def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
         sqx_host=settings.sqx_host, sqx_port=None,
     )
     if not mq5_source:
-        return False, "", f"Failed to get MQ5 source from SQX for '{safe_name}'"
+        # Fallback: portfolio child strategies are not databank reports. Extract
+        # the full strategy XML from the .sqx sources and let SQX generate the
+        # MQ5 from the XML inline (same path AlgoWizard uses).
+        strategy_xml = _extract_strategy_xml_from_sqx_sources(project, databank, strategy_name)
+        if not strategy_xml:
+            return False, "", (
+                f"Failed to get MQ5 source from SQX for '{safe_name}' and no .sqx source found on disk"
+            )
+        mq5_source = sqx_client.get_source_code(
+            project=project, databank=databank, strategy_name=safe_name,
+            sqx_host=settings.sqx_host, sqx_port=None,
+            strategy_xml=strategy_xml,
+        )
+        if not mq5_source:
+            return False, "", f"Failed to generate MQ5 from strategy XML for '{safe_name}'"
 
     # Write MQ5 to Experts/SQXBridge/
     mq5_file.write_text(mq5_source, encoding="utf-8")
@@ -2003,6 +2136,238 @@ def compile_expert_for_strategy(project: str, databank: str, strategy_name: str,
         return False, "", "Compilation timed out after 120s"
     except Exception as exc:
         return False, "", str(exc)
+
+
+# ── Portfolio per-strategy SQX stats/equity (from portfolio orders) ──
+
+# Cache: (project, databank, portfolio) -> orders list fetched from SQX
+_PORTFOLIO_ORDERS_CACHE: dict[tuple[str, str, str], list] = {}
+
+
+def _get_portfolio_orders(project: str, databank: str, portfolio: str) -> list | None:
+    """Fetch the portfolio report's orders from SQX once per run (cached).
+
+    Portfolio child strategies are not standalone databank reports, but the
+    portfolio's orders list attributes every trade to its child via the
+    ResultName field ("<strategy>: <data>/<timeframe>").
+    """
+    key = (project, databank, portfolio)
+    if key in _PORTFOLIO_ORDERS_CACHE:
+        return _PORTFOLIO_ORDERS_CACHE[key]
+    try:
+        port = _get_sqx_port()
+        params = urllib.parse.urlencode({
+            "projectName": project,
+            "databankName": databank,
+            "strategyName": portfolio,
+        })
+        req = urllib.request.Request(
+            f"http://{settings.sqx_host}:{port}/resultsPlugins/orders",
+            data=params.encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("success") == "ok":
+            orders = data.get("orders", [])
+            _PORTFOLIO_ORDERS_CACHE[key] = orders
+            return orders
+    except Exception as exc:
+        print(f"[SQX] portfolio orders fetch failed: {exc}")
+    return None
+
+
+def _compute_sqx_child_stats(orders: list, strategy_name: str, deposit: float):
+    """Compute per-child SQX stats + equity curve from portfolio orders.
+
+    Returns (stats dict, equity points list) or (None, None).
+    """
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+    target = _norm(strategy_name)
+    chosen = []
+    for o in orders:
+        result_name = str(o.get("ResultName") or "")
+        base = result_name.split(":")[0] if ":" in result_name else result_name
+        if _norm(base) == target:
+            chosen.append(o)
+    if not chosen:
+        return None, None
+
+    closed = [o for o in chosen if o.get("Type") not in (9, 10, 11)]
+    pls = [float(o.get("ProfitLoss") or 0) for o in closed]
+    if not pls:
+        return None, None
+
+    wins = [p for p in pls if p > 0]
+    losses = [p for p in pls if p <= 0]
+    gross_profit = sum(wins)
+    gross_loss = -sum(losses)
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
+
+    # Equity curve per child: deposit + cumulative ProfitLoss over closed deals,
+    # isolated from other children (mirrors the MT5 run's start conditions)
+    pts = [[0, round(deposit, 2)]]
+    bal = deposit
+    peak = deposit
+    dd = 0.0
+    for o in sorted(closed, key=lambda x: float(x.get("CloseTime") or 0)):
+        bal += float(o.get("ProfitLoss") or 0)
+        pts.append([len(pts), round(bal, 2)])
+        if bal > peak:
+            peak = bal
+        if peak > 0:
+            d = (peak - bal) / peak * 100.0
+            if d > dd:
+                dd = d
+
+    max_w = max_l = cur_w = cur_l = 0
+    for p in pls:
+        if p > 0:
+            cur_w += 1
+            cur_l = 0
+        else:
+            cur_l += 1
+            cur_w = 0
+        if cur_w > max_w:
+            max_w = cur_w
+        if cur_l > max_l:
+            max_l = cur_l
+
+    stats = {
+        "NetProfit": round(bal - deposit, 2),
+        "NumberOfTrades": len(pls),
+        "ProfitFactor": profit_factor,
+        "PctDrawdown": round(dd, 2),
+        "WinningPct": round(len(wins) / len(pls) * 100.0, 2),
+        "AvgLoss": round(sum(losses) / len(losses), 2) if losses else 0,
+        "MaxConsecWins": max_w,
+        "MaxConsecLoss": max_l,
+    }
+    return stats, pts
+
+
+def _load_job_result(job_id: str) -> dict:
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT result FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    finally:
+        conn.close()
+    if row and row[0]:
+        try:
+            return json.loads(row[0])
+        except Exception:
+            pass
+    return {}
+
+
+def _store_job_result(job_id: str, result: dict) -> None:
+    conn = _get_db()
+    try:
+        conn.execute("UPDATE jobs SET result = ? WHERE id = ?", (json.dumps(result), job_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _enrich_job_result_with_sqx(project: str, databank: str, portfolio: str,
+                                strategy_name: str, job_id: str, deposit: float) -> None:
+    """Attach SQX child stats/comparison/equity to a completed backtest result."""
+    try:
+        result = _load_job_result(job_id)
+        if not result.get("stats"):
+            return
+        orders = _get_portfolio_orders(project, databank, portfolio)
+        if not orders:
+            return
+        sqx_stats, sqx_points = _compute_sqx_child_stats(orders, strategy_name, deposit)
+        if sqx_stats:
+            result["sqxStats"] = sqx_stats
+            result["comparison"] = _build_comparison(sqx_stats, result.get("stats", {}))
+            result["sqxSource"] = "portfolio-orders"
+        if sqx_points:
+            result["sqxEquity"] = sqx_points
+        _store_job_result(job_id, result)
+        print(f"[PORTFOLIO] SQX stats enriched for {strategy_name[:50]}", flush=True)
+    except Exception as exc:
+        print(f"[PORTFOLIO] SQX enrichment failed for {strategy_name[:50]}: {exc}", flush=True)
+
+
+def _mt5_equity_points_from_csv(csv_path, deposit: float) -> list | None:
+    """Parse the MT5 deal-export CSV into equity chart points [[x, y], ...]."""
+    path = Path(csv_path)
+    if not path.exists():
+        return None
+    try:
+        buf = path.read_bytes()
+        is_utf16 = buf[:2] == b'\xff\xfe'
+        txt = buf[2:].decode('utf-16-le') if is_utf16 else buf.decode('utf-8', errors="replace")
+        equity = deposit
+        in_deals = False
+        pts = [[0, round(deposit, 2)]]
+        for line in txt.split('\n'):
+            if '- List of deals' in line:
+                in_deals = True
+                continue
+            if line.startswith('-') and in_deals:
+                break
+            if not in_deals or not line.strip():
+                continue
+            parts = line.split(';')
+            if len(parts) < 14 or not parts[2]:
+                continue
+            try:
+                profit = float(parts[12]) if parts[12] else 0
+            except ValueError:
+                continue
+            equity += profit
+            if parts[8] == 'out':
+                pts.append([len(pts), round(equity, 2)])
+        return pts
+    except Exception as exc:
+        print(f"[EQUITY] MT5 CSV parse error: {exc}")
+        return None
+
+
+@app.get("/backtest/{job_id}/equity")
+def backtest_job_equity(job_id: str, deposit: float = Query(10000)):
+    """Equity curves for a specific backtest job.
+
+    MT5: parsed from the job's saved CSV. SQX: per-child curve computed from
+    the portfolio orders (set by _enrich_job_result_with_sqx when done).
+    """
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT strategy_name, result FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {"deposit": deposit, "sqx": None, "mt5": None, "error": "Job not found"}
+
+    try:
+        result = json.loads(row[1]) if row[1] else {}
+    except Exception:
+        result = {}
+
+    sqx_pts = result.get("sqxEquity")
+    mt5_pts = None
+    csv_path = result.get("csvPath")
+    if csv_path:
+        mt5_pts = _mt5_equity_points_from_csv(csv_path, deposit)
+
+    if not sqx_pts and not mt5_pts:
+        return {
+            "deposit": deposit,
+            "sqx": None, "mt5": None,
+            "error": "No equity data available yet for this job.",
+        }
+    return {
+        "deposit": deposit,
+        "sqx": {"points": sqx_pts} if sqx_pts else None,
+        "mt5": {"points": mt5_pts} if mt5_pts else None,
+    }
 
 
 async def compile_portfolio_strategies(
@@ -2049,14 +2414,17 @@ async def compile_portfolio_strategies(
             name, exc = result
             if exc is None:
                 compiled.append(name)
-                # Find the ex5 path — re-compute it from strategy name
+                # Find the ex5 path — re-compute it from strategy name (match by ID)
                 safe_name = re.sub(r'\s+', '_', name).replace("\\", "_").replace("/", "_").strip()
                 ex5_file = Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge" / f"{safe_name}.ex5"
                 if not ex5_file.exists():
-                    short_prefix = safe_name.split("_")[0] + "_"
-                    for f in (Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge").glob(f'{short_prefix}*.ex5'):
-                        ex5_file = f
-                        break
+                    id_match = re.search(r"_?(\d{6,})_", safe_name) or re.search(r"(\d{6,})$", safe_name)
+                    if id_match:
+                        sid = id_match.group(1)
+                        for f in (Path(terminal_path).parent / "MQL5" / "Experts" / "SQXBridge").glob("*.ex5"):
+                            if sid in f.stem:
+                                ex5_file = f
+                                break
                 ex5_paths[name] = str(ex5_file)
                 print(f"[COMPILER] {name}: compiled OK -> {ex5_file.name}")
             else:
@@ -2593,7 +2961,7 @@ def _run_backtest_inner(job, ini_path, mt5_data_dir, reports_dir, experts_dir, s
     # Activity monitoring (BotPulse pattern: 5 min inactivity, 6h hard cap)
     started_at = time.time()
     hard_cap = 6 * 60 * 60  # 6 hours
-    post_sim_timeout = 30  # 30 sec after sim end is enough for report saving
+    post_sim_timeout = 12  # enough for report saving (bounded by .CSV checks)
     reached_end_at = None
 
     # Report-based completion detection (BotPulse pattern):

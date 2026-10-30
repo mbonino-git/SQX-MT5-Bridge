@@ -117,6 +117,7 @@ def get_source_code(
     strategy_name: str,
     sqx_host: str = "localhost",
     sqx_port: int | None = None,
+    strategy_xml: str | None = None,
 ) -> Optional[str]:
     """Call SQX's `sourcecode/print` endpoint and return MQ5 source code.
 
@@ -129,6 +130,11 @@ def get_source_code(
         strategy_name: Strategy name within the databank.
         sqx_host: SQX host (default: localhost).
         sqx_port: SQX REST API port (auto-detected if None).
+        strategy_xml: Optional full strategy XML (StrategyFile document).
+            When provided SQX generates the source from the XML directly
+            (same path AlgoWizard uses for strategies that have not been
+            backtested yet) instead of looking up a databank report —
+            this is how portfolio child strategies are sources_out.
 
     Returns:
         MQ5 source code string, or None on failure.
@@ -151,7 +157,7 @@ def get_source_code(
     # Determine money management type from SQX initialization data
     mm_type = _get_default_mm_type(sqx_host, port)
 
-    params = urllib.parse.urlencode({
+    form_fields = {
         "project": project,
         "databank": databank,
         "strategy": strategy_name,
@@ -170,17 +176,19 @@ def get_source_code(
         "symmetricVariables": "true",
         "recommendedParams": "true",
         "mmType": mm_type,
-    })
+    }
+    # Inline strategy XML (AlgoWizard path): SQX generates from the XML itself
+    if strategy_xml:
+        form_fields["strategyXML"] = strategy_xml
+
+    params = urllib.parse.urlencode(form_fields).encode("utf-8")
     url = f"http://{sqx_host}:{port}/sourcecode/print"
 
     try:
         req = urllib.request.Request(
             url,
-            data=params.encode("utf-8"),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
+            data=params,
+            headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
