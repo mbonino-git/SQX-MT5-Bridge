@@ -2017,6 +2017,13 @@ async def _run_backtest_job(job: BacktestJob):
     tester_ini_path = tester_dir / f"{job_id}.ini"
     ini_path.write_text("\r\n".join(ini_lines) + "\r\n", encoding="utf-8")
 
+    # Also write EA-level inputs to Strategy Tester config dir so they
+    # override the EA's defaults (e.g. disable SQX info panel in tester UI)
+    configs_dir = mt5_data_dir / "MQL5" / "Configs" / "StrategyTester"
+    configs_dir.mkdir(parents=True, exist_ok=True)
+    ea_ini_path = configs_dir / f"{safe_name}.ini"
+    ea_ini_path.write_text(f"InpsqDisplayInfoPanel=false\r\n", encoding="utf-8")
+
     # Log to file for reliability across async task boundaries
     try:
         log_path = Path(__file__).resolve().parent.parent / "backtest.log"
